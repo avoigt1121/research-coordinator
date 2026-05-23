@@ -86,7 +86,6 @@ Conceptual questions are answered directly; computation is dispatched to special
                 label="Conversation",
                 height=520,
                 show_label=False,
-                type="messages",
             )
 
             with gr.Row():
