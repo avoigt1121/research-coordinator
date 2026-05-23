@@ -1,3 +1,14 @@
+---
+title: Research Coordinator
+emoji: 🔬
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: "4.44.0"
+app_file: app.py
+pinned: false
+---
+
 # Research Coordinator
 
 A lightweight Gradio application that acts as an orchestrating router for multi-omics bioinformatics analysis.
