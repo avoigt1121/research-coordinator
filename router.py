@@ -110,8 +110,20 @@ class ResearchRouter:
 
         try:
             gc = GradioClient(hf_space)
-            # The DecoupleRpy Agent exposes a /chat endpoint; adjust if needed.
-            result = gc.predict(message, api_name="/chat")
+            # DecoupleRpy exposes /interact_with_agent — takes a chatbot history list,
+            # returns the updated history. We pass the user message as the first turn.
+            initial_history = [{"role": "user", "content": message}]
+            result = gc.predict(
+                chatbot_history=initial_history,
+                api_name="/interact_with_agent",
+            )
+            # result is the full updated chatbot history; extract the last assistant message
+            if isinstance(result, list) and result:
+                for msg in reversed(result):
+                    role = msg.get("role", "") if isinstance(msg, dict) else ""
+                    content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                    if role == "assistant" and content:
+                        return str(content)
             return str(result)
         except Exception as exc:
             return (
