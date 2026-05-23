@@ -110,13 +110,12 @@ class ResearchRouter:
 
         try:
             gc = GradioClient(hf_space)
-            # DecoupleRpy's /interact_with_agent takes a full Gradio chatbot history.
-            # The user message must be appended before calling; metadata/options are None.
-            initial_history = [
-                {"role": "user", "content": message, "metadata": None, "options": None}
-            ]
+            # DecoupleRpy's interact_with_agent reads the query from a hidden gr.State.
+            # Step 1: call /lambda to set that state for this session.
+            gc.predict(x=message, api_name="/lambda")
+            # Step 2: call /interact_with_agent with empty history — query comes from state.
             result = gc.predict(
-                chatbot_history=initial_history,
+                chatbot_history=[],
                 api_name="/interact_with_agent",
             )
             # result is the full updated chatbot history; extract the last assistant message
