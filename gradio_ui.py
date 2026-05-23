@@ -36,29 +36,36 @@ class CoordinatorUI:
                 f"_Routing to **{agent_name}** for computation — this may take a moment._\n\n"
                 f"_{reasoning}_"
             )
-            history = history + [[message, routing_note]]
+            history = history + [{"role": "user", "content": message},
+                                  {"role": "assistant", "content": routing_note}]
             yield history, ""
 
             # Dispatch and get result
             result = self._router.dispatch_to_specialist(agent_id, message)
 
-            # Append interpretation header
             full_response = (
                 f"_Routing to **{agent_name}** for computation._\n\n"
                 f"**Result from {agent_name}:**\n\n{result}"
             )
-            history[-1][1] = full_response
+            history[-1]["content"] = full_response
             yield history, ""
 
         else:
             # Direct Claude response — stream it
-            history = history + [[message, ""]]
+            history = history + [{"role": "user", "content": message},
+                                  {"role": "assistant", "content": ""}]
             yield history, ""
 
             accumulated = ""
-            for chunk in self._router.direct_response(message, history[:-1]):
+            # Build plain history for the API (exclude the current turn)
+            plain_history = [
+                (h["content"] if h["role"] == "user" else None,
+                 h["content"] if h["role"] == "assistant" else None)
+                for h in history[:-2]
+            ]
+            for chunk in self._router.direct_response(message, plain_history):
                 accumulated += chunk
-                history[-1][1] = accumulated
+                history[-1]["content"] = accumulated
                 yield history, ""
 
     # ------------------------------------------------------------------
@@ -66,13 +73,9 @@ class CoordinatorUI:
     # ------------------------------------------------------------------
 
     def build(self) -> gr.Blocks:
-        with gr.Blocks(
-            title="Research Coordinator",
-            theme=gr.themes.Soft(),
-            css=".agent-badge { font-size: 0.75rem; color: #666; }",
-        ) as demo:
+        with gr.Blocks(title="Research Coordinator") as demo:
             gr.Markdown(
-                """# Research Coordinator
+                """# 🔬 Research Coordinator
 
 A lightweight orchestrating assistant for multi-omics bioinformatics.
 Conceptual questions are answered directly; computation is dispatched to specialist agents.
@@ -83,7 +86,7 @@ Conceptual questions are answered directly; computation is dispatched to special
                 label="Conversation",
                 height=520,
                 show_label=False,
-                bubble_full_width=False,
+                type="messages",
             )
 
             with gr.Row():
@@ -108,8 +111,7 @@ Conceptual questions are answered directly; computation is dispatched to special
             )
 
             gr.Markdown(
-                "_Direct answers via Claude API · Computation via specialist agents (gradio_client)_",
-                elem_classes=["agent-badge"],
+                "_Direct answers via Claude API · Computation via specialist agents_",
             )
 
             # Wire up interactions
