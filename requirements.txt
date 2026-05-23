@@ -1,0 +1,4 @@
+gradio>=4.0
+anthropic>=0.25
+gradio_client>=0.6
+pyyaml>=6.0

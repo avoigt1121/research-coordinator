@@ -1,0 +1,122 @@
+"""
+Routes user messages to either:
+  - Direct Claude API response (fast, conceptual questions)
+  - Specialist agent via gradio_client (computation questions)
+"""
+import json
+import yaml
+from pathlib import Path
+from anthropic import Anthropic
+
+try:
+    from gradio_client import Client as GradioClient
+    GRADIO_CLIENT_AVAILABLE = True
+except ImportError:
+    GRADIO_CLIENT_AVAILABLE = False
+
+
+class ResearchRouter:
+    def __init__(
+        self,
+        agents_yaml: str = "agents.yaml",
+        prompts_yaml: str = "prompts.yaml",
+    ):
+        base = Path(__file__).parent
+        with open(base / agents_yaml) as f:
+            self._agents_cfg = yaml.safe_load(f)
+        with open(base / prompts_yaml) as f:
+            self._prompts_cfg = yaml.safe_load(f)
+
+        # Build a quick lookup by agent id
+        self._agents = {a["id"]: a for a in self._agents_cfg["agents"]}
+
+        self._client = Anthropic()
+        self._model = "claude-sonnet-4-6"
+
+        self._system_prompt = self._prompts_cfg["coordinator_system_prompt"]
+        self._routing_prompt = self._prompts_cfg["routing_prompt"]
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def classify(self, message: str) -> dict:
+        """Call Claude to classify: direct vs specialist.
+
+        Returns a dict with keys: route, agent_id, reasoning.
+        Falls back to "direct" on any parse error so the user always gets
+        a response.
+        """
+        prompt = f"{self._routing_prompt}\n\nUser message: {message}"
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"route": "direct", "agent_id": None, "reasoning": "parse error — defaulting to direct"}
+
+    def direct_response(self, message: str, history: list):
+        """Stream a direct Claude API response.
+
+        history: list of (user_str, assistant_str) tuples (Gradio format).
+        Yields text chunks as they arrive.
+        """
+        messages = []
+        for user_msg, assistant_msg in history:
+            if user_msg:
+                messages.append({"role": "user", "content": user_msg})
+            if assistant_msg:
+                messages.append({"role": "assistant", "content": assistant_msg})
+        messages.append({"role": "user", "content": message})
+
+        with self._client.messages.stream(
+            model=self._model,
+            max_tokens=2048,
+            system=self._system_prompt,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+
+    def dispatch_to_specialist(self, agent_id: str, message: str) -> str:
+        """Send message to specialist HF Space via gradio_client and return result.
+
+        Phase 1: real dispatch is implemented; the Space may be cold so we
+        wrap in try/except and return a helpful stub on failure.
+        """
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            return f"[Error] Unknown agent: {agent_id}"
+
+        hf_space = agent["hf_space"]
+
+        if not GRADIO_CLIENT_AVAILABLE:
+            return (
+                f"[Stub] gradio_client is not installed. "
+                f"Would dispatch to {agent['name']} ({hf_space}) with: {message}"
+            )
+
+        try:
+            gc = GradioClient(hf_space)
+            # The DecoupleRpy Agent exposes a /chat endpoint; adjust if needed.
+            result = gc.predict(message, api_name="/chat")
+            return str(result)
+        except Exception as exc:
+            return (
+                f"[{agent['name']}] The specialist agent could not be reached "
+                f"(Space may be cold or loading). Error: {exc}\n\n"
+                "Please try again in a moment, or rephrase your question for a direct answer."
+            )
+
+    def agent_display_name(self, agent_id: str) -> str:
+        agent = self._agents.get(agent_id, {})
+        return agent.get("name", agent_id)

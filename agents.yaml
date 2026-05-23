@@ -1,0 +1,31 @@
+agents:
+  - id: decouplerpy
+    name: "DecoupleRpy Agent"
+    description: "Bulk RNA-seq analysis: differential expression, TF activity (CollecTRI), pathway scoring (PROGENy), gene set enrichment (Hallmark/MSigDB), GEO data loading"
+    hf_space: "anne-voigt/Paper2Agent_decoupleRpy"
+    trigger_keywords:
+      - "differential expression"
+      - "DE analysis"
+      - "TF activity"
+      - "transcription factor"
+      - "PROGENy"
+      - "pathway"
+      - "Hallmark"
+      - "gene set"
+      - "enrichment"
+      - "CollecTRI"
+      - "how many samples"
+      - "tumor subtype"
+      - "classical"
+      - "basal"
+      - "GEO"
+      - "GSE"
+      - "load dataset"
+      - "metadata"
+    capabilities:
+      - bulk_rna_de
+      - tf_enrichment
+      - pathway_scoring
+      - gene_set_enrichment
+      - geo_data_loading
+      - metadata_queries
