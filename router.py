@@ -30,7 +30,10 @@ class ResearchRouter:
         # Build a quick lookup by agent id
         self._agents = {a["id"]: a for a in self._agents_cfg["agents"]}
 
-        self._client = Anthropic()
+        import os
+        # HF Space secret is named "Anthropic_API_KEY" (matches DecoupleRpy Space)
+        api_key = os.environ.get("Anthropic_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        self._client = Anthropic(api_key=api_key)
         self._model = "claude-sonnet-4-6"
 
         self._system_prompt = self._prompts_cfg["coordinator_system_prompt"]
