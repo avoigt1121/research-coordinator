@@ -118,15 +118,27 @@ class ResearchRouter:
                 chatbot_history=[],
                 api_name="/interact_with_agent",
             )
-            # result is the full updated chatbot history; extract the last assistant message
+            # result is the full updated chatbot history.
+            # Find the Final Solution message; fall back to the last substantive assistant message.
             if isinstance(result, list) and result:
-                for msg in reversed(result):
-                    if not isinstance(msg, dict):
+                solution = None
+                last_assistant = None
+                for msg in result:
+                    if not isinstance(msg, dict) or msg.get("role") != "assistant":
                         continue
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    if role == "assistant" and content:
-                        return str(content)
+                    content = msg.get("content", "") or ""
+                    if not content.strip():
+                        continue
+                    # Skip the HF log-link notice
+                    if "Full run log saved" in content or "huggingface.co/datasets" in content:
+                        continue
+                    last_assistant = content
+                    if "Final Solution" in content or "solution-content" in content:
+                        solution = content
+                if solution:
+                    return solution
+                if last_assistant:
+                    return last_assistant
             return str(result)
         except Exception as exc:
             return (
