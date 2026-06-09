@@ -4,7 +4,11 @@ Gradio chat interface for the Research Coordinator.
 Routing decisions are shown inline so the user always knows whether
 Claude answered directly or a specialist agent was dispatched.
 """
+import json
 import logging
+import tempfile
+from datetime import datetime
+from pathlib import Path
 import gradio as gr
 from router import ResearchRouter
 
@@ -124,6 +128,38 @@ class CoordinatorUI:
 
 
     # ------------------------------------------------------------------
+    # Session save / load
+    # ------------------------------------------------------------------
+
+    def _save_session(self, history: list) -> str:
+        """Serialize chatbot history to a temp JSON file and return the path."""
+        if not history:
+            return None
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=f"_research_session_{timestamp}.json",
+            delete=False,
+            mode="w",
+        )
+        json.dump(history, tmp, indent=2)
+        tmp.close()
+        return tmp.name
+
+    def _load_session(self, filepath) -> list:
+        """Deserialize a session JSON file back into chatbot history."""
+        if filepath is None:
+            return []
+        try:
+            with open(filepath, "r") as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                return []
+            return history
+        except Exception as exc:
+            logger.warning("Failed to load session file: %s", exc)
+            return []
+
+    # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
@@ -179,6 +215,19 @@ Conceptual questions are answered directly; computation is dispatched to special
                 label="Example questions",
             )
 
+            with gr.Accordion("Save / Load Session (optional)", open=False):
+                gr.Markdown(
+                    "_Download the current conversation as JSON, or upload a previous session to continue it._"
+                )
+                with gr.Row():
+                    save_btn = gr.Button("Download session", variant="secondary", scale=1)
+                    session_file = gr.File(
+                        label="Upload session",
+                        file_types=[".json"],
+                        scale=2,
+                    )
+                download_file = gr.File(label="Session file", visible=False)
+
             gr.Markdown(
                 "_Direct answers via Claude API · Computation via specialist agents_",
             )
@@ -193,6 +242,20 @@ Conceptual questions are answered directly; computation is dispatched to special
                 fn=self._respond,
                 inputs=[msg_box, chatbot, dataset_selector],
                 outputs=[chatbot, msg_box],
+            )
+            save_btn.click(
+                fn=self._save_session,
+                inputs=[chatbot],
+                outputs=[download_file],
+            ).then(
+                fn=lambda p: gr.File(value=p, visible=p is not None),
+                inputs=[download_file],
+                outputs=[download_file],
+            )
+            session_file.upload(
+                fn=self._load_session,
+                inputs=[session_file],
+                outputs=[chatbot],
             )
 
         return demo
