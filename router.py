@@ -90,7 +90,7 @@ class ResearchRouter:
             for text in stream.text_stream:
                 yield text
 
-    def dispatch_to_specialist(self, agent_id: str, message: str) -> str:
+    def dispatch_to_specialist(self, agent_id: str, message: str, dataset_constraint: list | None = None) -> str:
         """Send message to specialist HF Space via gradio_client and return result.
 
         Phase 1: real dispatch is implemented; the Space may be cold so we
@@ -101,6 +101,16 @@ class ResearchRouter:
             return f"[Error] Unknown agent: {agent_id}"
 
         hf_space = agent["hf_space"]
+
+        # Prepend dataset constraint note if user restricted selection
+        if dataset_constraint:
+            ids = ", ".join(dataset_constraint)
+            constraint_note = (
+                f"[Dataset constraint: the user has restricted analysis to the following "
+                f"datasets: {ids}. Only use these datasets unless the user explicitly asks "
+                f"for others.]\n\n"
+            )
+            message = constraint_note + message
 
         if not GRADIO_CLIENT_AVAILABLE:
             return (
