@@ -160,6 +160,13 @@ def write_report(graded: list[dict], path: Path):
     lines.append(f"**Total: {total}** — Quality: PASS {counts.get('PASS', 0)}, "
                   f"PARTIAL {counts.get('PARTIAL', 0)}, FAIL {counts.get('FAIL', 0)} "
                   f"| Routing: {total - len(routing_failures)}/{total} correct")
+
+    latencies = [r["latency_seconds"] for r in graded]
+    total_seconds = sum(latencies)
+    avg_seconds = total_seconds / total if total else 0
+    lines.append(f"**Latency:** total {total_seconds / 60:.1f} min, "
+                  f"avg {avg_seconds:.1f}s, min {min(latencies):.1f}s, "
+                  f"max {max(latencies):.1f}s")
     lines.append("")
 
     if routing_failures:

@@ -18,6 +18,9 @@ env/
 .env
 .env.*
 
+# Claude Code local state
+.claude/
+
 # IDE
 .vscode/
 .idea/
