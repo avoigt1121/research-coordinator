@@ -3,6 +3,8 @@ Routes user messages to either:
   - Direct Claude API response (fast, conceptual questions)
   - Specialist agent via gradio_client (computation questions)
 """
+from __future__ import annotations
+
 import json
 import yaml
 from pathlib import Path

@@ -4,6 +4,8 @@ Gradio chat interface for the Research Coordinator.
 Routing decisions are shown inline so the user always knows whether
 Claude answered directly or a specialist agent was dispatched.
 """
+from __future__ import annotations
+
 import json
 import logging
 import tempfile
