@@ -16,6 +16,11 @@ try:
 except ImportError:
     GRADIO_CLIENT_AVAILABLE = False
 
+# Safety cap on how many times dispatch_to_specialist will click "Continue"
+# (via /handle_continue) when the agent hits its step limit. Each continue
+# grants 15 more steps, so this allows up to MAX_CONTINUES * 15 extra steps.
+MAX_CONTINUES = 10
+
 
 class ResearchRouter:
     def __init__(
@@ -130,27 +135,21 @@ class ResearchRouter:
                 chatbot_history=[],
                 api_name="/interact_with_agent",
             )
-            # result is the full updated chatbot history.
-            # Find the Final Solution message; fall back to the last substantive assistant message.
-            if isinstance(result, list) and result:
-                solution = None
-                last_assistant = None
-                for msg in result:
-                    if not isinstance(msg, dict) or msg.get("role") != "assistant":
-                        continue
-                    content = msg.get("content", "") or ""
-                    if not content.strip():
-                        continue
-                    # Skip the HF log-link notice
-                    if "Full run log saved" in content or "huggingface.co/datasets" in content:
-                        continue
-                    last_assistant = content
-                    if "Final Solution" in content or "solution-content" in content:
-                        solution = content
-                if solution:
-                    return solution
-                if last_assistant:
-                    return last_assistant
+
+            # If the agent hit its step limit, keep clicking "Continue" (via the
+            # /handle_continue endpoint the Gradio UI's Continue button calls)
+            # until it produces a real solution. Capped to avoid an infinite loop
+            # if the agent never converges.
+            for _ in range(MAX_CONTINUES):
+                solution, last_assistant, step_limit_hit = self._extract_response(result)
+                if not step_limit_hit:
+                    break
+                result = gc.predict(chatbot=result, api_name="/handle_continue")
+
+            if solution:
+                return solution
+            if last_assistant:
+                return last_assistant
             return str(result)
         except Exception as exc:
             return (
@@ -158,6 +157,36 @@ class ResearchRouter:
                 f"(Space may be cold or loading). Error: {exc}\n\n"
                 "Please try again in a moment, or rephrase your question for a direct answer."
             )
+
+    @staticmethod
+    def _extract_response(chatbot_history: list) -> tuple[str | None, str | None, bool]:
+        """Inspect a DecoupleRpy chatbot history for a final solution.
+
+        Returns (solution, last_assistant_message, step_limit_hit).
+        """
+        if not isinstance(chatbot_history, list) or not chatbot_history:
+            return None, None, False
+
+        solution = None
+        last_assistant = None
+        step_limit_hit = False
+        for msg in chatbot_history:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "") or ""
+            if not content.strip():
+                continue
+            # Skip the HF log-link notice
+            if "Full run log saved" in content or "huggingface.co/datasets" in content:
+                continue
+            if "Step limit reached" in content:
+                step_limit_hit = True
+                continue
+            last_assistant = content
+            step_limit_hit = False
+            if "Final Solution" in content or "solution-content" in content:
+                solution = content
+        return solution, last_assistant, step_limit_hit
 
     def agent_display_name(self, agent_id: str) -> str:
         agent = self._agents.get(agent_id, {})
