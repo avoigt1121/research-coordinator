@@ -53,16 +53,23 @@ It always routes dataset/capability questions to the specialist.
 | `prompts.yaml` | System prompts: `coordinator_system_prompt`, `routing_prompt` |
 | `requirements.txt` | Python dependencies |
 | `.env` | Local dev only — never commit. Set `ANTHROPIC_API_KEY`. |
+| `.github/workflows/sync-to-hf-space.yml` | Auto-syncs `origin/main` → the `hf` Space on every push |
 
 ---
 
 ## Deployment
 
 - **HF Space**: `anne-voigt/research_coordinator`
-- **Sync**: Manual — does NOT auto-deploy from GitHub
-- **Push to HF**: `git push hf main` (requires `research_agent_token` write access)
-- **Both remotes configured**: `origin` = GitHub, `hf` = HF Space
-- **HF secret**: `ANTHROPIC_API_KEY` must be set in Space settings
+- **Sync**: Automatic — `.github/workflows/sync-to-hf-space.yml` force-pushes
+  `origin/main` to the `hf` remote on every push to `main` (also runnable
+  manually via `workflow_dispatch`). Requires a one-time `HF_TOKEN` repo
+  secret (write access to the Space) — see the workflow file for setup steps.
+- **`origin` is the source of truth** — do not push directly to `hf`; the
+  next push to `main` will force-overwrite it.
+- **Both remotes configured**: `origin` = GitHub, `hf` = HF Space (kept for
+  emergency/manual pushes only)
+- **HF secret**: `ANTHROPIC_API_KEY` must be set in Space settings (separate
+  from the `HF_TOKEN` GitHub Actions secret above)
 
 ---
 

@@ -6,29 +6,22 @@ Last updated: 2026-06-12
 
 ## Current State
 
-Deployed and functional, but **the `hf` Space (the live deployment) lags
-`origin`/local `main`**:
+Deployed and functional. **`origin`, `hf`, and the live Space are all in sync
+at `3ed815b`** — pushed 2026-06-12 and confirmed `RUNNING` via the HF Space
+runtime API (`sha: 3ed815ba29ad4d7f5806634252e30f099503e06b`). The
+auto-continue-past-step-limit fix (`98c2a61`) and the rest of the
+2026-06-09/06-12 eval-harness work are now live.
 
-- Local `main` / `origin/main`: `98c2a61` plus 2 new commits this session
-  (`2950b95`, `b35af4d`) — not yet pushed to `origin`.
-- `hf/main` (deployed Space `anne-voigt/research_coordinator`): `83b837e6`
-  "Add session save/load to Gradio UI" (2026-06-09 15:16) — **5 commits
-  behind** local `main`.
+**This class of drift shouldn't recur**: `.github/workflows/sync-to-hf-space.yml`
+(added 2026-06-12) force-pushes `origin/main` → `hf` on every push to `main`.
+`origin` is now the source of truth — do not push directly to `hf`.
 
-Of those 5 missing commits, **2 touch runtime files** (`router.py` /
-`gradio_ui.py`) and are not yet live on the Space:
-- `958bd60` — adds the `eval/` harness + a Python 3.9 type-syntax compat fix
-  to `router.py`/`gradio_ui.py` (+2 lines each)
-- `98c2a61` — **auto-continue specialist agent past its step limit**
-  (`router.py`, +50/-21). The most user-facing of the two: without it, long
-  DecoupleRpy analyses on the live Space can stop early at the LangGraph step
-  limit instead of being automatically resumed.
-
-The other 3 (`91eb0c1`, `2950b95`, `b35af4d`) are eval-harness/docs only — no
-runtime effect, but still worth shipping to keep `hf` and `origin` in sync.
-
-**Next deploy step (not yet done)**: `git push origin main`, then
-`git push hf main` to ship the auto-continue fix.
+One remaining one-time setup step: add an `HF_TOKEN` repo secret (write
+access to `anne-voigt/research_coordinator`) at
+github.com/avoigt1121/research-coordinator/settings/secrets/actions. Until
+that's added, the workflow runs on every push but fails at the push step
+(visible as a red X in the Actions tab) — harmless, just means auto-sync
+isn't active yet.
 
 ---
 
@@ -49,6 +42,29 @@ runtime effect, but still worth shipping to keep `hf` and `origin` in sync.
   `pilot_questions_10` (resumed from `ANS-005` onward, no `_graded.json`/
   `_report.md`). Now gitignored (`eval/results/_checkpoint_*.json`). Safe to
   delete or re-run to completion.
+- Closed the `hf`-vs-`origin` gap: pushed `origin main` and `hf main` to
+  `3ed815b` (the memory.md-update commit). Confirmed via the HF Space runtime
+  API that `anne-voigt/research_coordinator` rebuilt and is `RUNNING` at
+  `sha: 3ed815ba29ad4d7f5806634252e30f099503e06b`.
+- Added `.github/workflows/sync-to-hf-space.yml`: auto-syncs `origin/main` →
+  `hf` (force-push) on every push to `main`, so the Space can't silently fall
+  behind again. `origin` is now the documented source of truth; `hf` is a
+  pure mirror. One-time setup remaining: add an `HF_TOKEN` repo secret (see
+  "Current State").
+- Investigated whether research-coordinator should get a `hf-dev`-style dev
+  Space (DecoupleRpy_Agent has one). Findings: DecoupleRpy_Agent's `hf-dev`
+  remote (`anne-voigt/Paper2Agent_decoupleRpy_dev`) is at `5e4f4cb`
+  (2026-06-02) — 10 days and ~7 commits behind `origin`'s current `5dd994d`,
+  and the HF API can no longer fetch its info unauthenticated. All of the
+  2026-06-09/06-12 precompute-migration work shipped straight to `origin`
+  (prod), bypassing it entirely — the dev-Space pattern appears to have
+  fallen out of use. **Recommendation: skip a dev Space for
+  research-coordinator** — it's a thin router with low blast-radius (per
+  `CLAUDE.md`'s "if it went down, users could query the specialist directly"),
+  and a second Space would add secret/promotion overhead that doesn't seem to
+  be paying for itself even on the specialist side. Revisit if this repo
+  starts shipping riskier changes (e.g., once a second specialist is wired
+  up, per item 3 below).
 
 ---
 
@@ -84,11 +100,12 @@ runtime effect, but still worth shipping to keep `hf` and `origin` in sync.
 
 ## Known Issues / Next Steps
 
-### 0. `hf` Space is 5 commits behind `origin`/local `main` — HIGH PRIORITY
-See "Current State" above. `git push origin main` then `git push hf main`
-ships the auto-continue fix (`98c2a61`) and the Python 3.9 compat fix
-(`958bd60`) to the live Space. Offered to the user 2026-06-12; not yet
-executed — push is a separate opt-in step from committing.
+### 0. ~~`hf` Space behind `origin`/local `main`~~ — RESOLVED 2026-06-12
+Pushed `origin` and `hf` to `3ed815b`; Space confirmed `RUNNING` at that sha.
+Added `.github/workflows/sync-to-hf-space.yml` so `hf` auto-mirrors
+`origin/main` on every push going forward (see "Current State"). Remaining
+setup: add the `HF_TOKEN` repo secret (one-time, via GitHub UI — see the
+workflow file's header comment for steps).
 
 ### 1. Routing is keyword-based — fragile, but now has a regression test
 **Partially addressed 2026-06-09** (`958bd60`): `eval/run_eval.py` +
@@ -180,9 +197,12 @@ above (or a variant) before starting new work on this item.
 
 | Remote | URL | Status |
 |--------|-----|--------|
-| `origin` | `github.com/avoigt1121/research-coordinator` | Local `main` is 2 commits ahead (`2950b95`, `b35af4d`) — not yet pushed |
-| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | 5 commits behind local `main` (current HEAD `83b837e6`) — missing `958bd60`, `91eb0c1`, `98c2a61`, `2950b95`, `b35af4d` |
+| `origin` | `github.com/avoigt1121/research-coordinator` | `main` @ `3ed815b` |
+| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | `main` @ `3ed815b`, Space `RUNNING` |
 
-To push changes: commit locally → `git push origin main` → `git push hf main`.
-**Next**: push `origin` (low-risk, GitHub only, no deploy trigger), then
-`git push hf main` to ship the auto-continue fix (`98c2a61`) to the live Space.
+`origin` is the source of truth. `.github/workflows/sync-to-hf-space.yml`
+force-pushes `origin/main` → `hf` on every push to `main` — do not push
+directly to `hf` (it will be overwritten on the next sync). One-time setup
+still needed: add an `HF_TOKEN` repo secret with write access to
+`anne-voigt/research_coordinator` (Settings → Secrets and variables →
+Actions).

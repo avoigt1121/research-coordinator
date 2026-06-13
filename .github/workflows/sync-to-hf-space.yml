@@ -1,0 +1,34 @@
+name: Sync to HF Space
+
+# Mirrors origin/main to the research-coordinator HF Space (the `hf` git
+# remote) on every push to main, so the live Space can never silently drift
+# behind GitHub again.
+#
+# One-time setup (not done by this workflow):
+#   1. Create a HF token with write access to anne-voigt/research_coordinator
+#      at https://huggingface.co/settings/tokens
+#   2. Add it as a repository secret named HF_TOKEN:
+#      Settings -> Secrets and variables -> Actions -> New repository secret
+#      (or: gh secret set HF_TOKEN -R avoigt1121/research-coordinator)
+#
+# After setup, `origin` is the source of truth. Do not push directly to the
+# `hf` remote -- the next push to main will force-overwrite it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  sync-to-space:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git push --force "https://anne-voigt:${HF_TOKEN}@huggingface.co/spaces/anne-voigt/research_coordinator" main
