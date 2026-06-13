@@ -208,26 +208,56 @@ def main():
         bank = json.load(f)
 
     router = ResearchRouter()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Checkpoint file is keyed on the question bank name so a crashed run
+    # can be resumed without re-paying for already-completed questions.
+    checkpoint_path = RESULTS_DIR / f"_checkpoint_{questions_path.stem}_raw.json"
     raw_results = []
+    completed_ids = set()
+    if checkpoint_path.exists():
+        with open(checkpoint_path) as f:
+            raw_results = json.load(f)
+        completed_ids = {r["id"] for r in raw_results}
+        print(f"Resuming from checkpoint: {len(raw_results)} question(s) already completed")
+
     for i, q in enumerate(bank["questions"], 1):
+        if q["id"] in completed_ids:
+            print(f"[{i}/{len(bank['questions'])}] {q['id']}: skipped (already in checkpoint)")
+            continue
         print(f"[{i}/{len(bank['questions'])}] {q['id']}: {q['question'][:70]}...")
         result = run_question(router, q)
         print(f"    -> route={result['route_taken']} agent={result['agent_id']} "
               f"latency={result['latency_seconds']}s")
         raw_results.append(result)
+        with open(checkpoint_path, "w") as f:
+            json.dump(raw_results, f, indent=2)
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     raw_path = RESULTS_DIR / f"{timestamp}_raw.json"
     with open(raw_path, "w") as f:
         json.dump(raw_results, f, indent=2)
     print(f"\nWrote raw results to {raw_path}")
 
-    print("\nGrading with LLM judge...")
+    # Grading checkpoint, same idea — the judge calls are cheap individually
+    # but a crash partway through grading shouldn't force re-grading everything.
+    graded_checkpoint_path = RESULTS_DIR / f"_checkpoint_{questions_path.stem}_graded.json"
     graded_results = []
+    graded_ids = set()
+    if graded_checkpoint_path.exists():
+        with open(graded_checkpoint_path) as f:
+            graded_results = json.load(f)
+        graded_ids = {r["id"] for r in graded_results}
+        print(f"Resuming grading from checkpoint: {len(graded_results)} question(s) already graded")
+
+    print("\nGrading with LLM judge...")
     for i, r in enumerate(raw_results, 1):
+        if r["id"] in graded_ids:
+            print(f"[{i}/{len(raw_results)}] {r['id']}: skipped (already graded)")
+            continue
         print(f"[{i}/{len(raw_results)}] Judging {r['id']}...")
         graded_results.append(judge_result(router, r))
+        with open(graded_checkpoint_path, "w") as f:
+            json.dump(graded_results, f, indent=2)
 
     graded_path = RESULTS_DIR / f"{timestamp}_graded.json"
     with open(graded_path, "w") as f:
@@ -237,6 +267,10 @@ def main():
     report_path = RESULTS_DIR / f"{timestamp}_report.md"
     write_report(graded_results, report_path)
     print(f"Wrote report to {report_path}")
+
+    # Clean up checkpoints now that the run completed successfully.
+    checkpoint_path.unlink(missing_ok=True)
+    graded_checkpoint_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

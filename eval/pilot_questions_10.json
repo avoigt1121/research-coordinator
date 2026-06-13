@@ -1,0 +1,120 @@
+{
+  "metadata": {
+    "name": "Pilot subset of decoupleRpy Agent Evaluation Question Bank",
+    "scope": "DecoupleRpy specialist only. Every question is expected to route through the coordinator to the 'decouplerpy' specialist agent. Routing correctness (reaching DecoupleRpy) is graded automatically; response quality is graded by an LLM judge against expected_behavior. Broader multi-specialist or direct-response routing tests are out of scope for this bank.",
+    "source": "/Users/annivoigt/Documents/business/plans&documentation/decoupleRpy_agent_test_questions.json",
+    "total_questions": 18
+  },
+  "questions": [
+    {
+      "id": "ANS-005",
+      "category": "answerable_specified",
+      "question": "Compute TF activities with mlm on paca_au_rnaseq and group results by Bailey subtype.",
+      "target_datasets": [
+        "paca_au_rnaseq"
+      ],
+      "decoupler": "mlm + CollecTRI/DoRothEA",
+      "expected_behavior": "EXECUTE",
+      "notes": "Bailey labels native to PACA-AU."
+    },
+    {
+      "id": "ANS-009",
+      "category": "answerable_specified",
+      "question": "Run ulm with PROGENy on puleo_2018 and summarize pathway activity per the 5 subtypes.",
+      "target_datasets": [
+        "puleo_2018"
+      ],
+      "decoupler": "ulm + PROGENy",
+      "expected_behavior": "EXECUTE",
+      "notes": "Puleo carries 5 subtype labels."
+    },
+    {
+      "id": "INF-001",
+      "category": "answerable_infer_dataset",
+      "question": "I want to compare TF activities between basal and classical PDAC subtypes. Which dataset, and run it.",
+      "target_datasets": [
+        "gse71729_moffitt"
+      ],
+      "decoupler": "ulm/mlm + CollecTRI",
+      "expected_behavior": "INFER_DATASET",
+      "notes": "Moffitt is the canonical classical/basal source."
+    },
+    {
+      "id": "INF-005",
+      "category": "answerable_infer_dataset",
+      "question": "Estimate TF activities on the largest curated PDAC RNA-seq cohort.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "TF activity",
+      "expected_behavior": "INFER_DATASET",
+      "notes": "TCGA-PAAD is the largest curated RNA-seq set."
+    },
+    {
+      "id": "INF-007",
+      "category": "answerable_infer_dataset",
+      "question": "Which pathways look associated with worse survival in PDAC? Compute the activities I'd need.",
+      "target_datasets": [
+        "gse21501_stratford",
+        "gse57495",
+        "gse50827_nones"
+      ],
+      "decoupler": "PROGENy",
+      "expected_behavior": "INFER_DATASET",
+      "notes": "Pick a survival cohort, infer activities; should note that the survival STATISTICS themselves are downstream of decoupleR."
+    },
+    {
+      "id": "LIM-001",
+      "category": "data_limitation",
+      "question": "Use gse28735_pdac to compare the 4 Bailey molecular subtypes.",
+      "target_datasets": [
+        "gse28735_pdac"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "FLAG_LIMITATION",
+      "notes": "gse28735 is a 45-pair T/N design with no Bailey subtype labels; redirect to PACA-AU."
+    },
+    {
+      "id": "LIM-008",
+      "category": "data_limitation",
+      "question": "Build a well-powered tumor-vs-normal contrast in tcga_paad.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "FLAG_LIMITATION",
+      "notes": "TCGA-PAAD has very few normal samples; underpowered for T/N. Redirect to a matched-pair array set."
+    },
+    {
+      "id": "NOD-005",
+      "category": "no_data_refuse",
+      "question": "Use a single-cell PDAC atlas to score cell-type-specific TF activity.",
+      "target_datasets": [],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_NO_DATA",
+      "notes": "All 17 datasets are bulk; no single-cell."
+    },
+    {
+      "id": "OOS-009",
+      "category": "out_of_scope_refuse",
+      "question": "Fit a Kaplan-Meier curve and report the log-rank p-value for high vs low TF activity.",
+      "target_datasets": [
+        "gse21501_stratford"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_OUT_OF_SCOPE",
+      "notes": "BOUNDARY: decoupleR produces the activity scores but does not run survival statistics. Best response: produce the activities and redirect KM/log-rank to a survival package (lifelines/survival). Grade redirect-with-explanation as a pass."
+    },
+    {
+      "id": "OOS-013",
+      "category": "out_of_scope_refuse",
+      "question": "Deconvolve bulk tumor samples into cell-type fractions.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_OUT_OF_SCOPE",
+      "notes": "BOUNDARY: deconvolution is not core decoupleR; redirect to CIBERSORTx/BisqueRNA. Note it can score marker-based gene sets per sample, which is related but not deconvolution."
+    }
+  ]
+}

@@ -35,3 +35,6 @@ Thumbs.db
 gradio_cached_examples/
 flagged/
 *.tmp
+
+# Eval harness — transient resume checkpoints, cleaned up on successful run
+eval/results/_checkpoint_*.json
