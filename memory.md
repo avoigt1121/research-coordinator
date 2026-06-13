@@ -16,12 +16,13 @@ auto-continue-past-step-limit fix (`98c2a61`) and the rest of the
 (added 2026-06-12) force-pushes `origin/main` → `hf` on every push to `main`.
 `origin` is now the source of truth — do not push directly to `hf`.
 
-One remaining one-time setup step: add an `HF_TOKEN` repo secret (write
-access to `anne-voigt/research_coordinator`) at
-github.com/avoigt1121/research-coordinator/settings/secrets/actions. Until
-that's added, the workflow runs on every push but fails at the push step
-(visible as a red X in the Actions tab) — harmless, just means auto-sync
-isn't active yet.
+`HF_TOKEN` repo secret (write access to `anne-voigt/research_coordinator`)
+was added 2026-06-13. **Not yet confirmed working**: the only Actions run so
+far (`93056cf`, run
+[27473037298](https://github.com/avoigt1121/research-coordinator/actions/runs/27473037298))
+predates the secret and failed at the push step, as expected. No run has
+happened since the secret was added — confirm by re-running that job from
+the Actions tab, or by pushing anything to `main`.
 
 ---
 
@@ -103,9 +104,9 @@ isn't active yet.
 ### 0. ~~`hf` Space behind `origin`/local `main`~~ — RESOLVED 2026-06-12
 Pushed `origin` and `hf` to `3ed815b`; Space confirmed `RUNNING` at that sha.
 Added `.github/workflows/sync-to-hf-space.yml` so `hf` auto-mirrors
-`origin/main` on every push going forward (see "Current State"). Remaining
-setup: add the `HF_TOKEN` repo secret (one-time, via GitHub UI — see the
-workflow file's header comment for steps).
+`origin/main` on every push going forward (see "Current State"). `HF_TOKEN`
+repo secret added 2026-06-13 — first successful run not yet confirmed (see
+"Current State" for how to test).
 
 ### 1. Routing is keyword-based — fragile, but now has a regression test
 **Partially addressed 2026-06-09** (`958bd60`): `eval/run_eval.py` +
@@ -197,12 +198,11 @@ above (or a variant) before starting new work on this item.
 
 | Remote | URL | Status |
 |--------|-----|--------|
-| `origin` | `github.com/avoigt1121/research-coordinator` | `main` @ `3ed815b` |
-| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | `main` @ `3ed815b`, Space `RUNNING` |
+| `origin` | `github.com/avoigt1121/research-coordinator` | `main` @ `93056cf` |
+| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | `main` @ `93056cf` |
 
 `origin` is the source of truth. `.github/workflows/sync-to-hf-space.yml`
 force-pushes `origin/main` → `hf` on every push to `main` — do not push
-directly to `hf` (it will be overwritten on the next sync). One-time setup
-still needed: add an `HF_TOKEN` repo secret with write access to
-`anne-voigt/research_coordinator` (Settings → Secrets and variables →
-Actions).
+directly to `hf` (it will be overwritten on the next sync). `HF_TOKEN` repo
+secret added 2026-06-13; first successful run not yet confirmed (run
+27473037298 predates the secret and failed as expected).
