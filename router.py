@@ -22,6 +22,12 @@ except ImportError:
 # grants 15 more steps, so this allows up to MAX_CONTINUES * 15 extra steps.
 MAX_CONTINUES = 10
 
+# Number of times dispatch_to_specialist will retry the /lambda +
+# /interact_with_agent dispatch with a fresh session if the agent's reply
+# doesn't echo the dispatched query back (see _echoed_query) — guards
+# against an intermittent gr.State race between the two calls.
+MAX_DISPATCH_RETRIES = 2
+
 # Bound how long dispatch_to_specialist's gradio_client calls can hang —
 # without this, a cold/sleeping HF Space causes an indefinite hang instead
 # of the friendly "could not be reached" message.
@@ -213,15 +219,23 @@ class ResearchRouter:
             )
 
         try:
-            gc = GradioClient(hf_space, httpx_kwargs={"timeout": SPECIALIST_TIMEOUT_SECONDS})
-            # DecoupleRpy's interact_with_agent reads the query from a hidden gr.State.
-            # Step 1: call /lambda to set that state for this session.
-            gc.predict(x=message, api_name="/lambda")
-            # Step 2: call /interact_with_agent with empty history — query comes from state.
-            result = gc.predict(
-                chatbot_history=[],
-                api_name="/interact_with_agent",
-            )
+            # DecoupleRpy's interact_with_agent reads the query from a hidden gr.State,
+            # set by a separate /lambda call. This two-step dispatch occasionally races:
+            # /interact_with_agent can read the state before /lambda's write to it
+            # commits, so the agent sees an empty query and replies with a generic
+            # "no instruction received" message. Detect that and retry with a fresh
+            # session (new gradio_client = new session_hash) before giving up.
+            for attempt in range(MAX_DISPATCH_RETRIES):
+                gc = GradioClient(hf_space, httpx_kwargs={"timeout": SPECIALIST_TIMEOUT_SECONDS})
+                # Step 1: call /lambda to set that state for this session.
+                gc.predict(x=message, api_name="/lambda")
+                # Step 2: call /interact_with_agent with empty history — query comes from state.
+                result = gc.predict(
+                    chatbot_history=[],
+                    api_name="/interact_with_agent",
+                )
+                if self._echoed_query(result, message):
+                    break
 
             # If the agent hit its step limit before producing a solution, keep
             # clicking "Continue" (via the /handle_continue endpoint the Gradio
@@ -252,6 +266,22 @@ class ResearchRouter:
                 f"(Space may be cold or loading). Error: {exc}\n\n"
                 "Please try again in a moment, or rephrase your question for a direct answer."
             )
+
+    @staticmethod
+    def _echoed_query(chatbot_history: list, message: str) -> bool:
+        """Check whether chatbot_history's first (user) turn matches `message`.
+
+        Guards against an intermittent gr.State race between /lambda (which
+        stashes the query) and /interact_with_agent (which reads it) — if the
+        state read happens before the write commits, the agent sees an empty
+        query and responds with a generic "no instruction received" message.
+        """
+        if not isinstance(chatbot_history, list) or not chatbot_history:
+            return False
+        first = chatbot_history[0]
+        if not isinstance(first, dict) or first.get("role") != "user":
+            return False
+        return first.get("content", "").strip() == message.strip()
 
     @staticmethod
     def _extract_response(chatbot_history: list) -> tuple[str | None, str | None, bool]:
