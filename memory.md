@@ -348,6 +348,22 @@ against the live Space, use `/tmp/rc_venv313` (Python 3.13, gradio_client
 
 ---
 
+## What Was Done (2026-06-14, this session — "Go on with group 1 issue")
+
+Direct continuation of the prior session's Group 1 investigation (below).
+**Group 1 is now RESOLVED** — see Known Issue #7 (renumbered/struck-through)
+for full root cause, fix commits (`eee2782`, `5e4fed7` in `DecoupleRpy_Agent`),
+and confirmation evidence (47 MCP tools loaded + a real end-to-end analysis
+run with genuine tool calls and a saved HF run log).
+
+Groups 3/4/5 (presented as a plan in the prior session) remain
+not-yet-implemented, awaiting explicit user go-ahead. Suggested next step:
+a clean re-run of `eval/pilot_questions.json` to check whether
+ANS-001/005/009 now PASS with real tool-call traces (previously FAIL/PARTIAL
+due to fabrication under the 0-MCP-tools bug).
+
+---
+
 ## What Was Done (2026-06-13/14, this session — fully autonomous, 0 new user messages)
 
 Continuation of standing instructions from 2026-06-13 ("fix Group 2, then
@@ -543,43 +559,64 @@ stating its chosen `dataset_id` + rationale, and (b) `dataset_status` ==
 `no_preference` for these (so the coordinator's clarifying prompt doesn't
 fire for them).
 
-### 7. DecoupleRpy_Agent: 0 MCP tools loaded in production — PARTIALLY FIXED, root cause not fully identified
-**(This is "Group 1" — the prerequisite for verifying Groups 3/4/5.)**
-`_mcp_health_markdown` on the live Space shows "0 decoupleR MCP tools
-available", causing EXECUTE-class questions (TF activity, pathway scoring,
-group comparison) to fabricate plausible-looking results instead of running
-real analyses (see ANS-001/005/009 findings above).
+### 7. ~~DecoupleRpy_Agent: 0 MCP tools loaded in production~~ — RESOLVED 2026-06-14
+**(This was "Group 1" — the prerequisite for verifying Groups 3/4/5.)**
 
-**Fixed so far** (`DecoupleRpy_Agent` `7b766b1`, confirmed deployed): the MCP
-subprocess was failing with `ModuleNotFoundError: No module named 'fastmcp'`
-because `mcp_config.yaml`'s `command: ["python3", "server.py"]` resolved
-`python3` via `PATH` to a system interpreter without this project's deps.
-Fixed by using `sys.executable` instead. The raw-startup probe now confirms
-the subprocess starts correctly with the right interpreter/deps/versions.
+**Root cause** (the "no `decouplerpy` key, only `_raw_startup`" mystery from
+the prior round-5 diagnostic): `tool_manager.py`'s `add_mcp_server()` wraps
+`MCPManager.add_mcp()` in a generic `except Exception as e: print(...)` that
+silently swallows exceptions to stdout — invisible because
+`HfApi().fetch_space_logs()` 403s. `discover_mcp_tools_sync()` itself was
+succeeding (hence no `last_discovery_errors['decouplerpy']`), but
+`add_mcp()`'s **module-level import** of `from langchain_mcp_adapters.tools
+import _list_all_tools` (mcp_manager.py line 162) was raising `ImportError:
+cannot import name 'streamable_http_client' from
+'mcp.client.streamable_http'` — caught by `add_mcp_server`'s silent except,
+*before* any per-server discovery even ran.
 
-**Still 0 tools after the fix** — `fastmcp`/`mcp` version mismatch
-(2.11.2/1.10.1 prod vs 3.2.3/1.27.0 local) ruled out (both produce 47 tools
-locally). The round-5 diagnostic (`969a577`) bounds
-`session.initialize()`/`session.list_tools()` with 60s timeouts and
-guarantees `last_discovery_errors['decouplerpy']` is set whenever
-`discovered_tools` is empty — but production shows **no** `decouplerpy` key
-at all (only `_raw_startup`), implying `discovered_tools` is non-empty inside
-`_discover_async` yet `mcp_functions`/`_mcp_cache` end up empty by the time
-`_mcp_health_markdown` reads them.
+The actual incompatibility: unpinned `langchain-mcp-adapters` resolves to
+`0.3.0`, which imports the renamed `streamable_http_client` symbol — present
+only in `mcp>=~1.12`. But `gradio[oauth,mcp]==5.49.0` (hardcoded into HF's
+build process, not in `requirements.txt`) hard-pins `mcp==1.10.1`, which only
+has the old name `streamablehttp_client`. Both `langchain-mcp-adapters`
+versions declare `mcp>=1.9.2` in their metadata, so pip's solver never flags
+a conflict — it's a runtime-only symbol-rename incompatibility.
 
-**Next steps (not yet tried)**:
-- Add a diagnostic that records `len(discovered_tools)` and
-  `len(self.mcp_functions)` (or `_mcp_cache`) separately into
-  `last_discovery_errors` / the health markdown, to localize whether the gap
-  is in `_discover_async`'s return, in `add_mcp_server`'s "register each
-  tool" loop (~mcp_manager.py line 405+), or in how `_prewarm_mcp` reads
-  `seed.tool_manager.mcp_manager` vs. what `_mcp_health_markdown` reads.
-- Check whether `tool.inputSchema` (or another attribute) on production's
-  `mcp==1.10.1` `Tool` objects differs from local `mcp==1.27.0` in a way that
-  raises inside the "Register each tool" loop specifically (not inside
-  `_discover_async`, so not caught by the round-5 try/except).
-- Once root-caused and fixed, re-run `eval/pilot_questions.json` and confirm
-  ANS-001/005/009 move from FAIL/PARTIAL to PASS with real tool-call traces.
+**Fix** (`DecoupleRpy_Agent`):
+- `eee2782` — diagnostic: `add_mcp_server`'s except clause now records
+  `type(e).__name__`, the message, `mcp_functions` count at failure, and a
+  traceback into `last_discovery_errors["_add_mcp_server"]`. Zero behavior
+  change on the success path; immediately surfaced the `ImportError` above
+  via `/_mcp_health_markdown` once deployed.
+- `5e4fed7` — **the fix**: pin `langchain-mcp-adapters<=0.2.2` in
+  `requirements.txt` (0.2.2 still imports the old `streamablehttp_client`
+  name, present in both `mcp==1.10.1` and newer `mcp` releases). Local
+  `.venv` was already at `0.2.2` — which is why all prior local tests showed
+  47 tools while production showed 0; the bug only manifested with prod's
+  dependency resolution.
+
+**Confirmed live** (commit `5e4fed7`, `RUNNING`):
+- `/_mcp_health_markdown` → `_decoupleR analysis tools: 47 loaded ✓_`.
+- Manual `gradio_client` (`/tmp/rc_venv313`, `gradio_client==2.5.0`) replay of
+  `/lambda` + `/interact_with_agent` with "Run decoupleR on the Chan-Seng-Yue
+  PDAC dataset." produced a **real** multi-step run: `dataset_list_available()`
+  executed for real (16 datasets returned), correctly concluded
+  Chan-Seng-Yue isn't registered, and saved a real run log to
+  `anne-voigt/decoupleRpy_results` on HF — i.e. genuine tool execution, not
+  fabrication.
+
+**Residual oddity (not blocking)**: a second attempt via
+`/tmp/test_router_fix.py` (same two `gradio_client` calls, via
+`ResearchRouter.dispatch_to_specialist`) ran for ~29 minutes with no result
+and was killed; an earlier attempt via the stale system `/usr/bin/python3`
+(`gradio_client==1.3.0`, see the `gradio_client<=1.3.0` note above) failed
+instantly with the unrelated `JSONDecodeError` client-version issue. Since
+the manual replay with the *same* two calls and the *same* venv succeeded
+end-to-end, this is likely queue contention from running several concurrent
+sessions against the Space during this debugging session, not a regression.
+Worth a clean isolated retry of `eval/pilot_questions.json` (ANS-001/005/009)
+to confirm real tool-call traces now appear — that re-run is the next
+step, not yet done.
 
 ### 6. Conversation persistence ("saved state") — MEDIUM PRIORITY
 Users have no way to save a conversation and return to ask follow-up questions.
