@@ -1,0 +1,52 @@
+[1/18] ANS-001: Run ULM with CollecTRI on tcga_paad to estimate transcription-factor a...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=579.7s
+[2/18] ANS-005: Compute TF activities with mlm on paca_au_rnaseq and group results by ...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=1130.8s
+[3/18] ANS-009: Run ulm with PROGENy on puleo_2018 and summarize pathway activity per ...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=603.0s
+[4/18] ANS-021: On tcga_paad, run GSEA against Hallmark sets using a ranked logFC list...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=261.9s
+[5/18] INF-001: I want to compare TF activities between basal and classical PDAC subty...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=1015.3s
+[6/18] INF-005: Estimate TF activities on the largest curated PDAC RNA-seq cohort....
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=899.1s
+[7/18] INF-007: Which pathways look associated with worse survival in PDAC? Compute th...
+Loaded as API: https://anne-voigt-paper2agent-decouplerpy.hf.space
+    -> route=specialist agent=decouplerpy latency=2193.4s
+[8/18] INF-016: I have no dataset preference - just give robust TF activities on a big...
+Traceback (most recent call last):
+  File "/Users/annivoigt/Documents/GitHub/research-coordinator/eval/run_eval.py", line 277, in <module>
+    main()
+    ~~~~^^
+  File "/Users/annivoigt/Documents/GitHub/research-coordinator/eval/run_eval.py", line 228, in main
+    result = run_question(router, q)
+  File "/Users/annivoigt/Documents/GitHub/research-coordinator/eval/run_eval.py", line 82, in run_question
+    classification = router.classify(question)
+  File "/Users/annivoigt/Documents/GitHub/research-coordinator/router.py", line 61, in classify
+    
+    ...<3 lines>...
+    """
+  File "/private/tmp/rc_venv313/lib/python3.13/site-packages/anthropic/_utils/_utils.py", line 294, in wrapper
+    return func(*args, **kwargs)
+  File "/private/tmp/rc_venv313/lib/python3.13/site-packages/anthropic/resources/messages/messages.py", line 1009, in create
+    return self._post(
+           ~~~~~~~~~~^
+        "/v1/messages",
+        ^^^^^^^^^^^^^^^
+    ...<30 lines>...
+        stream_cls=Stream[RawMessageStreamEvent],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/private/tmp/rc_venv313/lib/python3.13/site-packages/anthropic/_base_client.py", line 1535, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/rc_venv313/lib/python3.13/site-packages/anthropic/_base_client.py", line 1194, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011Cc2FLQV16rXfxzwfC9n9K'}

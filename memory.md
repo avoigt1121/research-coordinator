@@ -65,16 +65,45 @@ No further action needed on this item.
     False`) work as expected. DecoupleRpy_Agent side verified via a
     standalone Jinja render (not yet tested against the live agent — its
     repo has no local venv with `langchain_core` installed).
-- **Eval rerun (Item 7)**: re-ran `eval/pilot_questions.json` (18 questions)
-  in a Python 3.13 venv (`/tmp/rc_venv313`, gradio_client 2.5.0) — see
-  "Eval Environment Note" below. Run crashed at question 8/18 (INF-016) with
-  `anthropic.BadRequestError: ... credit balance is too low`
-  (account-level, not a code issue — user topped up credits afterward).
-  7/18 completed with real specialist responses (latencies 262s–2193s,
-  consistent with the 2026-06-09 baseline's 339.5s avg) and are saved in
-  `eval/results/_checkpoint_pilot_questions_raw.json`; resuming
-  `eval/run_eval.py eval/pilot_questions.json` will continue from question 8
-  without re-running the first 7.
+- **Eval rerun (Item 7), completed**: re-ran `eval/pilot_questions.json` (18
+  questions) in a Python 3.13 venv (`/tmp/rc_venv313`, gradio_client 2.5.0) —
+  see "Eval Environment Note" below. First attempt crashed at question 8/18
+  (INF-016) with `anthropic.BadRequestError: ... credit balance is too low`
+  (account-level, not a code issue — user topped up credits). Resumed via
+  checkpoint (`eval/results/run_20260613_resume.log`), which skipped the 7
+  already-completed questions and ran 8-18 to completion. Final results in
+  `eval/results/20260613_195026_{raw,graded,report}.md`:
+  - **Quality: 5 PASS / 6 PARTIAL / 7 FAIL** (2026-06-09 baseline: 8/2/8 —
+    fewer outright fails but also fewer clean passes; net roughly flat to
+    slightly worse).
+  - **Routing: 17/18 correct** — OOS-002 (primer-design question) still
+    misroutes to `direct` instead of `decouplerpy`, same as the 2026-06-09
+    baseline. Pre-existing, not introduced by this session's changes.
+  - **Latency: 181.1 min total, avg 603.5s/question** (min 18.3s, max
+    2193.4s) — roughly double the 2026-06-09 baseline (101.8 min / 339.5s
+    avg). The INF-007 2193s run is a genuine multi-step analysis (DESeq2
+    survival split + PROGENy ULM) that completed with a full solution, not a
+    hang — but the doubled avg latency overall is a UX consideration (no
+    incremental feedback during long specialist runs).
+  - **New finding — fabrication pattern**: the LLM judge repeatedly flagged
+    ANS-001, ANS-005, ANS-009, INF-005, INF-007, INF-016, OOS-009, and
+    OOS-013 as likely *fabricating* results — precise-looking numbers
+    presented with no visible code/tool execution trace. Worth investigating
+    whether the specialist is actually running its tools for these or
+    narrating plausible-sounding output.
+  - **New finding — context-bleed-looking responses**: LIM-017, NOD-003, and
+    NOD-010 returned responses that look like replies to a *different,
+    unrelated* turn (e.g. NOD-003 returned "No actionable user instruction
+    has been received in this turn. I am ready and waiting."; NOD-010
+    returned "You're welcome — standing by for your next request."; LIM-017
+    returned "Acknowledged. No analysis requested, none performed."). These
+    read like session-state bleed in the gradio_client dispatch across
+    consecutive eval questions and warrant follow-up.
+  - Dataset-selection-heuristics verification (the original motivation for
+    this rerun) is inconclusive from this run alone — INF-005/007/016 are
+    among the PARTIAL/fabrication-flagged results, so it's unclear whether
+    the new heuristics are firing correctly in practice. Re-check once the
+    context-bleed and fabrication issues are understood.
 - Confirmed Known Issue #8-equivalent (docx claim that `_FALLBACK_DATASETS`
   in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
   matching the current biodata-registry manifest set. No fix needed.
