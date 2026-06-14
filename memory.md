@@ -316,6 +316,11 @@ No further action needed on this item.
       (`.venv`, 51906 chars total) includes the new section correctly and
       Jinja parses cleanly.
 
+      **Re-confirmed 2026-06-14** (post Group-4 deploy): HF Space
+      `anne-voigt/Paper2Agent_decoupleRpy` still at sha `b9efd4b`, stage
+      `RUNNING`; `/_mcp_health_markdown` reports "47 loaded ✓" — prompt-only
+      change remains stable.
+
       **Not yet verified against eval**: re-run OOS-009/OOS-013 (and ideally
       the full `eval/pilot_questions.json`) to confirm they now produce a
       REFUSE_OUT_OF_SCOPE response instead of a fabricated result.
