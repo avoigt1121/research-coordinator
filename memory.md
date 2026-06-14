@@ -322,19 +322,59 @@ No further action needed on this item.
     - **OOS-002** ("Design qPCR primers for KRAS") is a different case —
       it's not a bioinformatics-analysis question at all (wet-lab protocol
       design), and `routing_correct: false` (misroutes to `direct`).
-      research-coordinator's `routing_prompt` has no "out of scope" category
-      — "Design qPCR primers for KRAS" matches "Conceptual question about
-      biology, genes, pathways" (mentions a gene) and routes `direct`; the
-      `coordinator_system_prompt` then says the coordinator has "deep
+      research-coordinator's `routing_prompt` had no "out of scope" category
+      — "Design qPCR primers for KRAS" matched "Conceptual question about
+      biology, genes, pathways" (mentions a gene) and routed `direct`; the
+      `coordinator_system_prompt` then said the coordinator has "deep
       knowledge of gene biology" with no scope boundary, so Claude happily
-      designs primers. **Proposed fix**: add an "out of scope" category to
-      `prompts.yaml`'s `routing_prompt` (wet-lab/protocol questions
-      unrelated to PDAC transcriptomics analysis) and a corresponding
-      instruction in `coordinator_system_prompt` to decline such questions
-      directly, explaining the system's scope (PDAC decoupleR-based
-      transcriptomic analysis) rather than answering from general knowledge.
-    - Neither fix implemented yet this session — both are prompt-only
-      changes, low risk, good candidates for the next session.
+      designed primers.
+
+      **Group 4 — DONE 2026-06-14** (`research-coordinator` `a3010ac`,
+      synced to HF Space `anne-voigt/research_coordinator` via the
+      `sync-to-hf-space.yml` workflow — run completed `success`, Space sha
+      `a3010ac...`): added `"route": "out_of_scope"` to `routing_prompt`'s
+      JSON schema with explicit criteria for wet-lab/protocol-design
+      requests (primer/probe design, qPCR, cloning, plasmid construction,
+      antibody/reagent selection, CRISPR guide design), noting this applies
+      "even if the question mentions a gene or pathway relevant to PDAC".
+      Added a new "## Scope" section to `coordinator_system_prompt` stating
+      the system's scope (PDAC decoupleR transcriptomic analysis over the
+      dataset registry) and instructing the coordinator to decline wet-lab
+      questions, explain the scope boundary, and suggest external resources
+      (PrimerBank, Primer-BLAST, lab core facility) instead of answering
+      from general knowledge. Because `route` values other than
+      `"specialist"` already fall through to `direct_response()` (which uses
+      `coordinator_system_prompt`), no changes to `router.py` or
+      `gradio_ui.py` were needed — the new route value is for
+      classification/logging clarity, and the actual decline behavior comes
+      entirely from the `## Scope` system-prompt addition.
+
+      **Verified locally** (via `ResearchRouter` with `.env` loaded):
+      - `classify("Design qPCR primers for KRAS")` →
+        `{"route": "out_of_scope", "agent_id": null, "dataset_status": null,
+        "reasoning": "Designing qPCR primers is a wet-lab/bench-work task,
+        not a transcriptomic data analysis request."}`
+      - `classify("Design CRISPR guide RNAs to knock out SMAD4")` and
+        `classify("How do I clone KRAS into a plasmid for overexpression?")`
+        both also correctly return `"out_of_scope"`.
+      - `classify("What pathways does TP53 regulate?")` still returns
+        `"direct"` (no over-triggering on conceptual gene questions).
+      - `classify("Run a TF activity analysis, no dataset preference, on a
+        large cohort")` still returns `"specialist"` /
+        `"no_preference"` (no regression to Group 1/2 dataset-status
+        routing).
+      - `direct_response("Design qPCR primers for KRAS", [])` now declines,
+        states the system's PDAC-decoupleR scope, points to PrimerBank/
+        Primer-BLAST/a lab core facility for primer design, and offers the
+        transcriptomic alternative (KRAS expression / MAPK pathway activity
+        in registered PDAC datasets) instead of fabricating a primer
+        sequence.
+
+      **Not yet verified against eval**: re-run OOS-002 (and ideally the
+      full `eval/pilot_questions.json`) to confirm it now produces
+      `routing_correct: true` and a REFUSE_OUT_OF_SCOPE-style response.
+
+      HF Space confirmed `RUNNING` at sha `a3010ac` post-deploy.
   - **ANS-021** ("...using a ranked logFC list I provide", PARTIAL) is a
     likely eval *question-design* issue, not an agent bug: the agent
     correctly sets up GSEA infrastructure, loads TCGA-PAAD, and asks the user
