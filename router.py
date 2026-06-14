@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import yaml
+import httpx
 from pathlib import Path
 from anthropic import Anthropic
 
@@ -20,6 +21,11 @@ except ImportError:
 # (via /handle_continue) when the agent hits its step limit. Each continue
 # grants 15 more steps, so this allows up to MAX_CONTINUES * 15 extra steps.
 MAX_CONTINUES = 10
+
+# Bound how long dispatch_to_specialist's gradio_client calls can hang —
+# without this, a cold/sleeping HF Space causes an indefinite hang instead
+# of the friendly "could not be reached" message.
+SPECIALIST_TIMEOUT_SECONDS = 120
 
 
 class ResearchRouter:
@@ -53,7 +59,7 @@ class ResearchRouter:
     def classify(self, message: str) -> dict:
         """Call Claude to classify: direct vs specialist.
 
-        Returns a dict with keys: route, agent_id, reasoning.
+        Returns a dict with keys: route, agent_id, dataset_status, reasoning.
         Falls back to "direct" on any parse error so the user always gets
         a response.
         """
@@ -72,7 +78,61 @@ class ResearchRouter:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            return {"route": "direct", "agent_id": None, "reasoning": "parse error — defaulting to direct"}
+            return {
+                "route": "direct",
+                "agent_id": None,
+                "dataset_status": None,
+                "reasoning": "parse error — defaulting to direct",
+            }
+
+    def classify_dataset_reply(self, pending_message: str, reply: str,
+                                dataset_choices: list[tuple[str, str]]) -> dict:
+        """Check whether `reply` answers a pending dataset-specification prompt.
+
+        Returns a dict with keys:
+          - "is_reply": True if `reply` names a dataset/cohort from
+            `dataset_choices`, or says the user has no preference. False if
+            it looks like a new, unrelated question.
+          - "preference_note": when is_reply is True, a short instruction to
+            prepend to the dispatched message — either naming the chosen
+            dataset_id or telling the specialist to apply its dataset
+            selection heuristics. None otherwise.
+
+        Falls back to {"is_reply": False, "preference_note": None} on any
+        parse error, so an unrecognized reply is treated as a fresh question.
+        """
+        ids = ", ".join(f"{label} ({did})" for label, did in dataset_choices)
+        prompt = (
+            "A user was asked to specify a dataset (or say they have no preference) "
+            f"for this pending request: \"{pending_message}\"\n\n"
+            f"Available datasets: {ids}\n\n"
+            f"The user's next message is: \"{reply}\"\n\n"
+            "Reply with JSON only:\n"
+            "{\n"
+            '  "is_reply": true | false,\n'
+            '  "preference_note": "..." | null\n'
+            "}\n\n"
+            "Set is_reply=true if the message names a dataset/cohort from the list above, "
+            "or says they have no preference / to pick the best one / etc.\n"
+            "Set is_reply=false if it looks like a new, unrelated question.\n"
+            "If is_reply=true, set preference_note to a short instruction for the specialist: "
+            "either '[User dataset preference: <dataset_id>]' (using the matching dataset_id) "
+            "or '[User has no dataset preference — apply your dataset selection heuristics.]'."
+        )
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=128,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"is_reply": False, "preference_note": None}
 
     def direct_response(self, message: str, history: list):
         """Stream a direct Claude API response.
@@ -96,6 +156,33 @@ class ResearchRouter:
         ) as stream:
             for text in stream.text_stream:
                 yield text
+
+    def specialist_status_note(self, agent_id: str) -> str | None:
+        """Check the specialist's HF Space runtime status via the HF API.
+
+        Returns a short note to show the user if the Space isn't RUNNING
+        (e.g. it's asleep and waking up), or None if it's running or the
+        status couldn't be determined.
+        """
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            return None
+        hf_space = agent["hf_space"]
+        try:
+            resp = httpx.get(
+                f"https://huggingface.co/api/spaces/{hf_space}/runtime",
+                timeout=5,
+            )
+            stage = resp.json().get("stage")
+        except Exception:
+            return None
+        if stage and stage != "RUNNING":
+            return (
+                f"_The specialist Space is currently `{stage}` — if it's "
+                f"asleep (HF free tier), waking it up can take ~30-60s."
+                f" Please be patient._"
+            )
+        return None
 
     def dispatch_to_specialist(self, agent_id: str, message: str, dataset_constraint: list | None = None) -> str:
         """Send message to specialist HF Space via gradio_client and return result.
@@ -126,7 +213,7 @@ class ResearchRouter:
             )
 
         try:
-            gc = GradioClient(hf_space)
+            gc = GradioClient(hf_space, httpx_kwargs={"timeout": SPECIALIST_TIMEOUT_SECONDS})
             # DecoupleRpy's interact_with_agent reads the query from a hidden gr.State.
             # Step 1: call /lambda to set that state for this session.
             gc.predict(x=message, api_name="/lambda")

@@ -1,14 +1,14 @@
 # memory.md — Research Coordinator Working State
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 ---
 
 ## Current State
 
 Deployed and functional. **`origin`, `hf`, and the live Space are all in sync
-at `3ed815b`** — pushed 2026-06-12 and confirmed `RUNNING` via the HF Space
-runtime API (`sha: 3ed815ba29ad4d7f5806634252e30f099503e06b`). The
+at `92095ea`** — confirmed `RUNNING` via the HF Space runtime API
+(`sha: 92095ea064cf631a4e7a844a2d4e1a0df7dcedf4`). The
 auto-continue-past-step-limit fix (`98c2a61`) and the rest of the
 2026-06-09/06-12 eval-harness work are now live.
 
@@ -17,12 +17,79 @@ auto-continue-past-step-limit fix (`98c2a61`) and the rest of the
 `origin` is now the source of truth — do not push directly to `hf`.
 
 `HF_TOKEN` repo secret (write access to `anne-voigt/research_coordinator`)
-was added 2026-06-13. **Not yet confirmed working**: the only Actions run so
-far (`93056cf`, run
-[27473037298](https://github.com/avoigt1121/research-coordinator/actions/runs/27473037298))
-predates the secret and failed at the push step, as expected. No run has
-happened since the secret was added — confirm by re-running that job from
-the Actions tab, or by pushing anything to `main`.
+was added 2026-06-13 and is **confirmed working**: run
+[27474397877](https://github.com/avoigt1121/research-coordinator/actions/runs/27474397877)
+(triggered by `92095ea`) succeeded end-to-end including the "Push to Hugging
+Face Space" step, and the live Space rebuilt and is `RUNNING` at that sha.
+No further action needed on this item.
+
+---
+
+## What Was Done (2026-06-13, this session)
+
+- **Specialist cold-start handling** (Known Issue #2, resolved): added
+  `ResearchRouter.specialist_status_note()` (`router.py`), which checks
+  `https://huggingface.co/api/spaces/{hf_space}/runtime` and returns a
+  "Space is currently `{stage}` — waking up can take ~30-60s" note when the
+  Space isn't `RUNNING`. `gradio_ui.py` appends this to the routing message
+  shown before dispatch. Also added `SPECIALIST_TIMEOUT_SECONDS = 120` and
+  pass `httpx_kwargs={"timeout": 120}` to `GradioClient(...)` so a cold/dead
+  Space fails with the existing friendly "could not be reached" message
+  instead of hanging indefinitely. Added `httpx>=0.24` to `requirements.txt`.
+- **Intelligent dataset selection** (Known Issue #5, implemented — pending
+  eval verification): two-part change per
+  `/Users/annivoigt/.claude/plans/radiant-fluttering-cerf.md`.
+  - **DecoupleRpy_Agent** (`/Users/annivoigt/Documents/GitHub/DecoupleRpy_Agent`,
+    uncommitted): `src/agent.py` now passes `survival_columns` through to the
+    per-dataset prompt dict (both call sites in `get_system_prompt()` and
+    `generate()`). `prompts.yaml` gains a new "## Dataset Selection
+    Heuristics" section (survival/prognostic, tumor-vs-normal matched-pair,
+    subtype (Bailey/Moffitt/Puleo), and no-preference/robust-cohort guidance,
+    each naming specific `dataset_id`s) plus an updated Efficiency Rule #1
+    telling the agent to apply it and state its choice + rationale before
+    proceeding when no dataset is named.
+  - **research-coordinator**: `routing_prompt` now returns a `dataset_status`
+    field (`specified` / `no_preference` / `unspecified` / `meta`);
+    `ResearchRouter.classify()` passes it through and a new
+    `classify_dataset_reply()` checks whether a follow-up message answers a
+    pending dataset prompt. `gradio_ui.py` adds a `pending_specialist`
+    `gr.State`: on `dataset_status=="unspecified"` the coordinator asks the
+    user to pick a dataset or say "no preference" instead of dispatching
+    immediately; the next turn either combines the reply with the original
+    request and dispatches, or (if it looks unrelated) discards the pending
+    prompt and classifies fresh.
+  - Verified via live API calls in `/tmp/rc_venv313`: all four
+    `dataset_status` values classify correctly, and both
+    `classify_dataset_reply()` paths ("no preference" → heuristics note,
+    "use tcga_paad" → dataset-id note, unrelated question → `is_reply:
+    False`) work as expected. DecoupleRpy_Agent side verified via a
+    standalone Jinja render (not yet tested against the live agent — its
+    repo has no local venv with `langchain_core` installed).
+- **Eval rerun (Item 7)**: re-ran `eval/pilot_questions.json` (18 questions)
+  in a Python 3.13 venv (`/tmp/rc_venv313`, gradio_client 2.5.0) — see
+  "Eval Environment Note" below. Run crashed at question 8/18 (INF-016) with
+  `anthropic.BadRequestError: ... credit balance is too low`
+  (account-level, not a code issue — user topped up credits afterward).
+  7/18 completed with real specialist responses (latencies 262s–2193s,
+  consistent with the 2026-06-09 baseline's 339.5s avg) and are saved in
+  `eval/results/_checkpoint_pilot_questions_raw.json`; resuming
+  `eval/run_eval.py eval/pilot_questions.json` will continue from question 8
+  without re-running the first 7.
+- Confirmed Known Issue #8-equivalent (docx claim that `_FALLBACK_DATASETS`
+  in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
+  matching the current biodata-registry manifest set. No fix needed.
+
+### Eval Environment Note
+The local dev environment's default Python (3.9, via
+`/Library/Developer/CommandLineTools/usr/bin/python3`) can only install
+`gradio_client<=1.3.0`, which predates Gradio's `/gradio_api/` `api_prefix`
+routing scheme (introduced in Gradio 5.x). Against the now-upgraded
+DecoupleRpy Space (Python 3.11 / gradio 5.49.0), `gradio_client 1.3.0`'s
+`_get_api_info()` hits `/info?serialize=False` (200, SPA HTML) instead of
+`/gradio_api/info?serialize=False`, raising `JSONDecodeError: Expecting
+value: line 1 column 1 (char 0)` for every specialist call. **For eval runs
+against the live Space, use `/tmp/rc_venv313` (Python 3.13, gradio_client
+2.5.0)** or otherwise ensure `gradio_client>=1.4.0` (requires Python>=3.10).
 
 ---
 
@@ -119,14 +186,16 @@ direct-response routing bank (explicitly out of scope per
 **Planned**: investigate the OOS-002 misroute; expand the bank beyond
 DecoupleRpy-only scope once a second specialist exists.
 
-### 2. No error handling for specialist timeout
-If `anne-voigt/Paper2Agent_decoupleRpy` is sleeping (HF free tier), the gradio_client
-call times out with no user-friendly message.
-**Planned**: Add timeout handling with a "specialist is starting up, retry in ~30s" message.
+### 2. ~~No error handling for specialist timeout~~ — RESOLVED 2026-06-13
+`ResearchRouter.specialist_status_note()` checks the HF Space runtime API and
+surfaces a "Space is `{stage}` — waking up can take ~30-60s" note before
+dispatch; `GradioClient` now has a 120s `httpx_kwargs` timeout so a cold/dead
+Space falls through to the existing friendly error message instead of hanging
+indefinitely. See "What Was Done (2026-06-13, this session)".
 
 Note: distinct from the step-limit issue fixed by `98c2a61` (2026-06-09) —
 that fix handles the specialist *running* but hitting LangGraph's step cap;
-this item is about the specialist *not yet awake* (cold start / HF free-tier
+this item was about the specialist *not yet awake* (cold start / HF free-tier
 sleep).
 
 ### 3. Single specialist hardcoded
@@ -137,29 +206,17 @@ has never been added. When a second agent is ready, test the multi-agent routing
 The HF write token was shared in plaintext in a prior session.
 **ACTION REQUIRED**: Rotate at huggingface.co/settings/tokens.
 
-### 5. Intelligent dataset selection — MEDIUM PRIORITY
-The GUI dataset selector (added 2026-06-09) is user-driven only. There is no
-guidance for the agent on *which* datasets to prefer when the user hasn't specified.
-The live registry is already injected into the specialist's system prompt, so the
-raw material is there. What's missing is explicit selection heuristics.
-
-Examples of reasoning that should be encoded:
-- "User asked about survival → prefer datasets with encoded survival endpoints
-  (puleo_2018, paca_au_rnaseq, gse28735, gse50827_nones, gse57495, cptac_pda)"
-- "User asked about normal vs. tumor → prefer matched-pair datasets (gse16515_mayo, gse28735_pdac)"
-- "User wants robust findings → suggest running on multiple independent cohorts"
-- "User asked about subtypes → filter to datasets with subtype labels (gse71729_moffitt, paca_au_rnaseq, puleo_2018)"
-
-**Implementation plan:**
-- Update `coordinator_system_prompt` or `routing_prompt` in `prompts.yaml` with
-  dataset selection heuristics (one section per research question type)
-- Optionally: add a lightweight `dataset_recommend` tool to the specialist that
-  takes a research question and returns ranked suggestions with rationale
-- The dataset_recommend tool path touches DecoupleRpy_Agent tool code, not just prompts
-
-**Estimated effort:** 0.5–1 day. Mostly prompt engineering. The tool variant adds ~0.5 days
-for tool implementation + testing. Low implementation risk; requires careful prompt testing
-to avoid the agent ignoring the heuristics or over-constraining.
+### 5. Intelligent dataset selection — IMPLEMENTED 2026-06-13, pending eval verification
+Implemented per `/Users/annivoigt/.claude/plans/radiant-fluttering-cerf.md` —
+see "What Was Done (2026-06-13, this session)" for the full description
+(DecoupleRpy_Agent prompt heuristics + `survival_columns` passthrough;
+research-coordinator `dataset_status` routing field + clarifying-prompt
+flow). DecoupleRpy_Agent changes are uncommitted. Once both sides are
+committed/deployed, re-run `eval/pilot_questions.json` and check the
+INFER_DATASET-category questions (INF-005/007/016) for: (a) the specialist
+stating its chosen `dataset_id` + rationale, and (b) `dataset_status` ==
+`no_preference` for these (so the coordinator's clarifying prompt doesn't
+fire for them).
 
 ### 6. Conversation persistence ("saved state") — MEDIUM PRIORITY
 Users have no way to save a conversation and return to ask follow-up questions.

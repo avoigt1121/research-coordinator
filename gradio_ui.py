@@ -74,47 +74,95 @@ class CoordinatorUI:
     # Chat handler
     # ------------------------------------------------------------------
 
-    def _respond(self, message: str, history: list, selected_datasets: list):
-        """Handle one user turn. Yields (history, "") pairs for streaming."""
+    def _dispatch_specialist(self, history: list, agent_id: str, message: str,
+                              selected_datasets: list, reasoning: str | None = None):
+        """Append a routing notice to `history`, dispatch to the specialist, then
+        fill in the result. Yields (history, "") pairs for streaming.
+
+        Expects `history[-1]` to be a placeholder assistant message.
+        """
+        agent_name = self._router.agent_display_name(agent_id)
+
+        routing_note = f"_Routing to **{agent_name}** for computation — this may take a moment._"
+        if reasoning:
+            routing_note += f"\n\n_{reasoning}_"
+        status_note = self._router.specialist_status_note(agent_id)
+        if status_note:
+            routing_note += f"\n\n{status_note}"
+        history[-1]["content"] = routing_note
+        yield history, ""
+
+        # Dispatch and get result, passing dataset constraint if set
+        all_ids = [v for _, v in self._dataset_choices]
+        constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
+        result = self._router.dispatch_to_specialist(agent_id, message, dataset_constraint=constraint)
+
+        full_response = (
+            f"_Routing to **{agent_name}** for computation._\n\n"
+            f"**Result from {agent_name}:**\n\n{result}"
+        )
+        history[-1]["content"] = full_response
+        yield history, ""
+
+    def _respond(self, message: str, history: list, selected_datasets: list, pending_specialist: dict | None):
+        """Handle one user turn. Yields (history, "", pending_specialist) tuples for streaming."""
         if not message.strip():
-            yield history, ""
+            yield history, "", pending_specialist
             return
+
+        # 0. If a dataset-specification prompt is pending, check whether this
+        # message answers it (names a dataset, or says "no preference").
+        if pending_specialist:
+            reply_info = self._router.classify_dataset_reply(
+                pending_specialist["message"], message, self._dataset_choices
+            )
+            if reply_info.get("is_reply"):
+                note = reply_info.get("preference_note")
+                combined_message = pending_specialist["message"]
+                if note:
+                    combined_message = f"{note}\n\n{combined_message}"
+                agent_id = pending_specialist["agent_id"]
+
+                history = history + [{"role": "user", "content": message},
+                                      {"role": "assistant", "content": ""}]
+                for h, m in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets):
+                    yield h, m, None
+                return
+            # Doesn't look like a reply to the pending prompt — drop it and
+            # classify this message fresh as a new question.
+            pending_specialist = None
 
         # 1. Classify the message
         classification = self._router.classify(message)
         route = classification.get("route", "direct")
         agent_id = classification.get("agent_id")
+        dataset_status = classification.get("dataset_status")
         reasoning = classification.get("reasoning", "")
 
         if route == "specialist" and agent_id:
-            agent_name = self._router.agent_display_name(agent_id)
+            if dataset_status == "unspecified":
+                agent_name = self._router.agent_display_name(agent_id)
+                clarify_msg = (
+                    f"_This will go to the **{agent_name}**, but no dataset was specified._\n\n"
+                    "You can pick one from the **Dataset Selection** panel above and re-send "
+                    "your question, or just reply **\"no preference\"** and I'll let the "
+                    "specialist choose the best fit and explain why."
+                )
+                history = history + [{"role": "user", "content": message},
+                                      {"role": "assistant", "content": clarify_msg}]
+                yield history, "", {"message": message, "agent_id": agent_id}
+                return
 
-            # Show routing notification immediately
-            routing_note = (
-                f"_Routing to **{agent_name}** for computation — this may take a moment._\n\n"
-                f"_{reasoning}_"
-            )
             history = history + [{"role": "user", "content": message},
-                                  {"role": "assistant", "content": routing_note}]
-            yield history, ""
-
-            # Dispatch and get result, passing dataset constraint if set
-            all_ids = [v for _, v in self._dataset_choices]
-            constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
-            result = self._router.dispatch_to_specialist(agent_id, message, dataset_constraint=constraint)
-
-            full_response = (
-                f"_Routing to **{agent_name}** for computation._\n\n"
-                f"**Result from {agent_name}:**\n\n{result}"
-            )
-            history[-1]["content"] = full_response
-            yield history, ""
+                                  {"role": "assistant", "content": ""}]
+            for h, m in self._dispatch_specialist(history, agent_id, message, selected_datasets, reasoning):
+                yield h, m, None
 
         else:
             # Direct Claude response — stream it
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            yield history, ""
+            yield history, "", None
 
             accumulated = ""
             # Build plain history for the API (exclude the current turn)
@@ -126,7 +174,7 @@ class CoordinatorUI:
             for chunk in self._router.direct_response(message, plain_history):
                 accumulated += chunk
                 history[-1]["content"] = accumulated
-                yield history, ""
+                yield history, "", None
 
 
     # ------------------------------------------------------------------
@@ -183,6 +231,10 @@ Conceptual questions are answered directly; computation is dispatched to special
                 show_label=False,
             )
 
+            # Holds {"message": ..., "agent_id": ...} when the coordinator has
+            # asked the user to specify a dataset and is awaiting their reply.
+            pending_specialist = gr.State(value=None)
+
             with gr.Accordion("Dataset Selection (optional)", open=False):
                 gr.Markdown(
                     "_Select datasets to constrain analysis. Leave empty (or select all) to use the full registry._"
@@ -237,13 +289,13 @@ Conceptual questions are answered directly; computation is dispatched to special
             # Wire up interactions
             submit_btn.click(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector],
-                outputs=[chatbot, msg_box],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist],
+                outputs=[chatbot, msg_box, pending_specialist],
             )
             msg_box.submit(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector],
-                outputs=[chatbot, msg_box],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist],
+                outputs=[chatbot, msg_box, pending_specialist],
             )
             save_btn.click(
                 fn=self._save_session,
