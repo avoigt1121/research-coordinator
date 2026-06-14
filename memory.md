@@ -380,13 +380,25 @@ No further action needed on this item.
       `routing_correct: true` and a REFUSE_OUT_OF_SCOPE-style response.
 
       HF Space confirmed `RUNNING` at sha `a3010ac` post-deploy.
-  - **ANS-021** ("...using a ranked logFC list I provide", PARTIAL) is a
-    likely eval *question-design* issue, not an agent bug: the agent
-    correctly sets up GSEA infrastructure, loads TCGA-PAAD, and asks the user
-    to paste their ranked logFC list — but `run_eval.py` is single-turn, so
-    no list is ever provided and the agent can't proceed to EXECUTE. Either
-    rephrase ANS-021 to include inline data, or accept "asks for required
-    input" as a valid outcome for this question.
+  - **ANS-021** ("...using a ranked logFC list I provide", PARTIAL) is an
+    eval *question-design* issue, not an agent bug: the agent correctly sets
+    up GSEA infrastructure, loads TCGA-PAAD, and asks the user to paste their
+    ranked logFC list — but `run_eval.py` is single-turn, so no list is ever
+    provided and the agent can't proceed to EXECUTE.
+
+    **Group 5 — DONE 2026-06-14** (`research-coordinator` `b469629`): added a
+    new `REQUEST_REQUIRED_INPUT` rubric category to `eval/run_eval.py`'s
+    `JUDGE_RUBRIC` — PASS = agent does all the setup it can and then clearly
+    asks for the missing user-supplied input without fabricating numbers;
+    FAIL = fabricating results to avoid asking. Reclassified ANS-021's
+    `expected_behavior` from `EXECUTE` to `REQUEST_REQUIRED_INPUT` in
+    `eval/pilot_questions.json` with updated grading notes explaining the
+    single-turn limitation. Re-graded the existing 2026-06-13 agent response
+    against the new rubric with **no change to agent behavior**: judge
+    verdict flipped from PARTIAL to PASS ("correctly identifies that the
+    ranked logFC list is missing and asks for it in multiple usable formats
+    ... without fabricating any GSEA results"). Not yet re-run as part of a
+    full eval pass.
 - Confirmed Known Issue #8-equivalent (docx claim that `_FALLBACK_DATASETS`
   in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
   matching the current biodata-registry manifest set. No fix needed.
