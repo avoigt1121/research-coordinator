@@ -403,6 +403,61 @@ No further action needed on this item.
   in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
   matching the current biodata-registry manifest set. No fix needed.
 
+### Full 18-question eval re-run — 2026-06-14 (post Groups 1/3/4/5)
+
+`eval/results/20260614_164236_{raw,graded,report}.json/.md` — live run against
+both Spaces (`research-coordinator` `ec0448c`, `DecoupleRpy_Agent` `b9efd4b`,
+both `RUNNING`). **Overall: PASS 12, PARTIAL 2, FAIL 4** (up from PASS 5,
+PARTIAL 6, FAIL 7 on 2026-06-13), routing 17/18 "correct" by the harness's
+automated check.
+
+**Targeted fixes confirmed working:**
+- **OOS-002** ("Design qPCR primers for KRAS"): FAIL → **PASS**. Now routes
+  `out_of_scope` (Group 4) and the coordinator declines, states system scope,
+  points to PrimerBank/Primer-BLAST, and offers the KRAS-pathway-activity
+  alternative — judge: "exactly meeting the REFUSE_OUT_OF_SCOPE expectation."
+  (The harness's automated routing-correctness check still flags this as a
+  "routing failure" because `EXPECTED_AGENT_ID="decouplerpy"` for the whole
+  bank — this is a harness limitation for this one question, not a real
+  problem; the `out_of_scope` route is correct and desired.)
+- **OOS-009** (Kaplan-Meier/log-rank) and **OOS-013** (cell-type
+  deconvolution): both FAIL → **PASS**. Group 3's "## Capabilities &
+  Out-of-Scope Analyses" section works live — both responses correctly state
+  the limitation, name external tools (lifelines/R survival;
+  CIBERSORTx/EPIC/BisqueRNA), and offer decoupleR outputs as inputs to those
+  tools.
+- **ANS-021**: PARTIAL → still **PARTIAL**, but for a *different* reason than
+  before — judge confirms it now satisfies "REQUEST_REQUIRED_INPUT" (asks for
+  the ranked list in a usable format, no fabricated GSEA numbers), but this
+  run's response skipped the "do all the setup you can" half (didn't load
+  tcga_paad / confirm Hallmark sets first, instead argued GSEA is out of
+  decoupleR's scope). Group 5's rubric/category change is working as
+  intended; this is now an agent-response variance issue, not an eval-design
+  issue.
+- **INF-007**: PARTIAL → **PASS** (Group 1's dataset-selection heuristics:
+  picks TCGA-PAAD, justifies it, computes PROGENy activities, correctly
+  notes survival stats are downstream/out-of-scope).
+
+**New/recurring finding — widespread result fabrication (regressions vs
+2026-06-13, likely agent-response variance not a prompt regression):**
+**ANS-005** (FAIL, unchanged), **ANS-009** (PARTIAL → FAIL), **INF-005**
+(PARTIAL → FAIL), **INF-016** (PARTIAL → FAIL), and **LIM-008** (PASS →
+PARTIAL) all show the same pattern: the agent presents detailed,
+precise-looking numeric results (Cohen's d, padj, specific TF rankings,
+"83.8% of CollecTRI network genes matched", etc.) with no visible evidence of
+actual tool execution. INF-005 additionally picked `paca_au_rnaseq` instead
+of the expected `tcga_paad` ("largest curated RNA-seq cohort") and fabricated
+results for that wrong dataset too. This is the same fabrication pattern
+flagged earlier for INF-005/007/016 (see "shared fabrication/trace-visibility
+issue" above) — it appears to be non-deterministic (these specific questions
+PASS/PARTIAL on some runs, FAIL on others) rather than caused by the Group
+3/4/5 prompt edits, since Groups 3/4/5 touched out-of-scope handling and
+routing, not the EXECUTE code path. **Candidate "Group 6"**: investigate
+whether `<solution>` is being reached without a preceding successful tool
+call (trace visibility), and/or add an explicit system-prompt instruction
+that numeric results in the final solution MUST come from an actual
+`decoupler`/MCP tool call in this turn's trace — not yet implemented.
+
 ### Eval Environment Note
 The local dev environment's default Python (3.9, via
 `/Library/Developer/CommandLineTools/usr/bin/python3`) can only install
