@@ -232,12 +232,19 @@ No further action needed on this item.
       add a startup self-check / health-check endpoint that reports
       `len(get_all_tool_functions())` so this is observable without a live
       diagnostic replay.
-    - Open hypothesis, not yet checked: the router's dispatch path uses
-      `/lambda` + `/interact_with_agent` (the Space's "first" Gradio UI
-      wiring); there's also a parallel `/lambda_2` +
-      `/interact_with_agent_1` wiring (see `diag_api.py` finding,
-      2026-06-13) — worth checking whether that second wiring's session
-      setup has the same MCP-loading issue.
+    - **Hypothesis checked and closed**: the `/lambda_2` +
+      `/interact_with_agent_1` pair is NOT a separately configured
+      agent/toolset. `gradio_ui.py` (~lines 1073-1091) wires the *same*
+      `self.interact_with_agent` method (with the same
+      `[stored_messages, chatbot, session_state]` args and the same shared
+      `self._mcp_cache`/`_prewarm_mcp`) to two UI events —
+      `text_input.submit(...)` (Enter key) and `submit_btn.click(...)`
+      (Submit button) — each preceded by an identical `lambda x: (x, "",
+      ...)` step. Gradio auto-suffixes duplicate function bindings (`_1`),
+      producing `/lambda`+`/interact_with_agent` and
+      `/lambda_2`+`/interact_with_agent_1`. Both paths share the exact same
+      MCP-loading code and are equally exposed to the silent-failure bug
+      above — there's no "other wiring" to fix separately.
     - The earlier "trace-visibility / judge can't verify" framing (below,
       now superseded) is still *true as a secondary issue* — even successful
       tool calls are stripped from what the judge sees — but it is not the
