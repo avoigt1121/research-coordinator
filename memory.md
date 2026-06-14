@@ -239,21 +239,23 @@ No further action needed on this item.
       either "decoupleR analysis tools: 47 loaded ✓" or a red "Analysis
       tools failed to load (0 ... )" banner — observable without a live
       diagnostic replay.
-      **Self-test note**: while testing these fixes locally, an unactivated
-      venv (`PATH` lacking a bare `python` binary — only `python3`/
-      `.venv/bin/python` exist) made `add_mcp()` fail with
-      `FileNotFoundError: [Errno 2] No such file or directory: 'python'`
-      (`mcp_config.yaml`'s `decouplerpy` server has `command: ["python",
-      "server.py"]`). Re-ran with `.venv/bin` prepended to `PATH` →
-      succeeded, 47 tools discovered. **This was a test-harness artifact,
-      not a live-Space bug** — the HF Space's own startup command requires
-      `python` to already be resolvable on PATH (it's how the Space launches
-      `gradio_ui.py`/`app.py` in the first place), so the same `PATH` is
-      available to the `add_mcp()` subprocess. No `mcp_config.yaml` change
-      needed. The real (and now-fixed) failure mode on the live Space is
-      whatever silent exception was being swallowed at the two call sites
-      above — still not identified with certainty, but no longer able to
-      fail silently after this fix.
+      **Self-test note — CORRECTED 2026-06-14, see "What Was Done
+      (2026-06-13/14)" below.** The original note (this session) concluded
+      the `python`/`python3` PATH issue was "a test-harness artifact, not a
+      live-Space bug" and that no `mcp_config.yaml`/code change was needed.
+      **This was wrong.** `mcp_config.yaml`'s `command: ["python3",
+      "server.py"]` is resolved via `PATH` *at MCP-subprocess-spawn time* by
+      `mcp_manager.py`'s `add_mcp_server`, which is a different resolution
+      than "whatever launched `gradio_ui.py`/`app.py`" — on a fresh HF Space
+      build, `python3` on `PATH` can land on a system interpreter without
+      this project's `requirements.txt` installed, so the MCP subprocess
+      dies with `ModuleNotFoundError: No module named 'fastmcp'` and the
+      handshake silently returns 0 tools. Confirmed live: this WAS production's
+      actual failure mode. Fixed by mapping `cmd in ("python","python3")` →
+      `sys.executable` in `add_mcp_server` (commit `7b766b1`) — confirmed
+      deployed and the subprocess now starts with the correct interpreter/deps.
+      0-tools persisted after this fix for a separate, still-unresolved reason
+      (see Known Issue #7 below).
     - **Hypothesis checked and closed**: the `/lambda_2` +
       `/interact_with_agent_1` pair is NOT a separately configured
       agent/toolset. `gradio_ui.py` (~lines 1073-1091) wires the *same*
@@ -343,6 +345,76 @@ DecoupleRpy Space (Python 3.11 / gradio 5.49.0), `gradio_client 1.3.0`'s
 value: line 1 column 1 (char 0)` for every specialist call. **For eval runs
 against the live Space, use `/tmp/rc_venv313` (Python 3.13, gradio_client
 2.5.0)** or otherwise ensure `gradio_client>=1.4.0` (requires Python>=3.10).
+
+---
+
+## What Was Done (2026-06-13/14, this session — fully autonomous, 0 new user messages)
+
+Continuation of standing instructions from 2026-06-13 ("fix Group 2, then
+build/execute a plan for Groups 3/4/5"). Groups 3/4/5 (prompt-only changes in
+`DecoupleRpy_Agent`/`research-coordinator`) can't be properly verified while
+the specialist has 0 MCP tools, so this session focused on Group 1
+(root-causing the 0-MCP-tools bug, Known Issue #7 below in DecoupleRpy_Agent).
+
+- **Group 2 — DONE.** `research-coordinator` `c5dbd4f`: `dispatch_to_specialist`
+  retries the `/lambda` + `/interact_with_agent` dispatch with a fresh
+  `gradio_client` session (up to `MAX_DISPATCH_RETRIES=2`) if the agent's
+  reply doesn't echo back the dispatched query — guards the intermittent
+  `gr.State` race between the two calls.
+- **Group 1 — PARTIAL, real progress, not fully resolved.** All changes in
+  `DecoupleRpy_Agent` (origin IS the live HF Space — each push deploys):
+  - `7b766b1` — **root-cause fix**: `mcp_manager.py`'s `add_mcp_server` now
+    remaps `cmd in ("python","python3")` → `sys.executable` before spawning
+    the MCP subprocess (PATH-resolved `python3` could land on a system
+    interpreter without this project's deps — see corrected Self-test note
+    above). Also added a raw subprocess startup probe to `_prewarm_mcp()`
+    (`gradio_ui.py`) that runs `sys.executable server.py` directly and
+    records its rc/stdout/stderr tail into `_mcp_discovery_errors["_raw_startup"]`,
+    independent of the MCP handshake. **Confirmed deployed and working**: the
+    probe shows `rc=0` with "Starting MCP server 'Paper2Agent' with transport
+    'stdio'" and correct fastmcp/mcp versions — the subprocess itself now
+    starts correctly in production, a real improvement over the prior
+    `ModuleNotFoundError` state.
+  - **Version-mismatch hypothesis investigated and ruled out**: production's
+    unpinned `fastmcp`/`mcp` resolve to `fastmcp==2.11.2`/`mcp==1.10.1` on a
+    fresh build (vs. local `.venv`'s `fastmcp==3.2.3`/`mcp==1.27.0`). Tested
+    both combinations locally with the `sys.executable` fix — **both produce
+    47 tools**. Version mismatch is not the cause of 0 tools.
+  - `04d1576` (reverted) — attempted to pin `fastmcp>=3.2.3`/`mcp>=1.27.0` in
+    `requirements.txt` to match the locally-verified-working combo. Caused
+    `BUILD_ERROR` in production: `gradio[oauth,mcp]==5.49.0` (hardcoded into
+    HF's build process, not from `requirements.txt`) hard-pins `mcp==1.10.1`
+    — direct conflict, confirmed via `info.runtime.raw['errorMessage']` and a
+    local `pip install --dry-run`.
+  - `bc579fd` — `git revert --no-edit 04d1576`, pushed immediately. Confirmed
+    Space back to `RUNNING` at `bc579fd`. **Net `requirements.txt` change for
+    the session: zero** — `fastmcp`/`mcp` remain unpinned.
+  - `969a577` — round-5 diagnostic: `discover_mcp_tools_sync` now wraps
+    `session.initialize()` and `session.list_tools()` in
+    `asyncio.wait_for(..., timeout=60)` with per-step timing recorded in a
+    `timing` dict, and **always** populates
+    `last_discovery_errors[server_name]` (either with `"handshake timing:
+    {...}"` if `discovered_tools` is empty, or with the
+    exception+timing on error) — closing the previous gap where 0 tools could
+    occur with no diagnostic info at all.
+  - **Result after `969a577`, deployed and checked via `_mcp_health_markdown`**:
+    still 0 MCP tools, but `_mcp_discovery_errors` contains **only**
+    `_raw_startup` (subprocess starts fine, correct interpreter/versions) —
+    **no `decouplerpy` key at all**. Per the new code this should be
+    impossible if `discovered_tools` ends up empty (one of the two branches
+    above always sets it). Its absence implies `discovered_tools` is
+    *non-empty* inside `_discover_async`, yet `self._mcp_cache` /
+    `mcp_functions` end up empty by the time `_mcp_health_markdown` reads
+    them. **This is the new, narrower mystery — see Known Issue #7.**
+  - Per self-imposed instruction, `969a577` is the last diagnostic round for
+    now — stopping further DecoupleRpy_Agent deploys pending the user's
+    review of the Groups 3/4/5 plan (presented separately, see chat).
+  - 403 Forbidden on `HfApi().fetch_space_logs()` remains unresolved — all
+    diagnosis continues via code-level `/_mcp_health_markdown` instrumentation.
+  - Commits this session, in order: (research-coordinator) `c5dbd4f`;
+    (DecoupleRpy_Agent) `3a22ae7`, `e4428e8`, `457352f` (earlier in session,
+    the silent-exception/health-markdown fixes referenced above),
+    `7b766b1`, `04d1576` (reverted), `bc579fd` (revert), `969a577`.
 
 ---
 
@@ -470,6 +542,44 @@ INFER_DATASET-category questions (INF-005/007/016) for: (a) the specialist
 stating its chosen `dataset_id` + rationale, and (b) `dataset_status` ==
 `no_preference` for these (so the coordinator's clarifying prompt doesn't
 fire for them).
+
+### 7. DecoupleRpy_Agent: 0 MCP tools loaded in production — PARTIALLY FIXED, root cause not fully identified
+**(This is "Group 1" — the prerequisite for verifying Groups 3/4/5.)**
+`_mcp_health_markdown` on the live Space shows "0 decoupleR MCP tools
+available", causing EXECUTE-class questions (TF activity, pathway scoring,
+group comparison) to fabricate plausible-looking results instead of running
+real analyses (see ANS-001/005/009 findings above).
+
+**Fixed so far** (`DecoupleRpy_Agent` `7b766b1`, confirmed deployed): the MCP
+subprocess was failing with `ModuleNotFoundError: No module named 'fastmcp'`
+because `mcp_config.yaml`'s `command: ["python3", "server.py"]` resolved
+`python3` via `PATH` to a system interpreter without this project's deps.
+Fixed by using `sys.executable` instead. The raw-startup probe now confirms
+the subprocess starts correctly with the right interpreter/deps/versions.
+
+**Still 0 tools after the fix** — `fastmcp`/`mcp` version mismatch
+(2.11.2/1.10.1 prod vs 3.2.3/1.27.0 local) ruled out (both produce 47 tools
+locally). The round-5 diagnostic (`969a577`) bounds
+`session.initialize()`/`session.list_tools()` with 60s timeouts and
+guarantees `last_discovery_errors['decouplerpy']` is set whenever
+`discovered_tools` is empty — but production shows **no** `decouplerpy` key
+at all (only `_raw_startup`), implying `discovered_tools` is non-empty inside
+`_discover_async` yet `mcp_functions`/`_mcp_cache` end up empty by the time
+`_mcp_health_markdown` reads them.
+
+**Next steps (not yet tried)**:
+- Add a diagnostic that records `len(discovered_tools)` and
+  `len(self.mcp_functions)` (or `_mcp_cache`) separately into
+  `last_discovery_errors` / the health markdown, to localize whether the gap
+  is in `_discover_async`'s return, in `add_mcp_server`'s "register each
+  tool" loop (~mcp_manager.py line 405+), or in how `_prewarm_mcp` reads
+  `seed.tool_manager.mcp_manager` vs. what `_mcp_health_markdown` reads.
+- Check whether `tool.inputSchema` (or another attribute) on production's
+  `mcp==1.10.1` `Tool` objects differs from local `mcp==1.27.0` in a way that
+  raises inside the "Register each tool" loop specifically (not inside
+  `_discover_async`, so not caught by the round-5 try/except).
+- Once root-caused and fixed, re-run `eval/pilot_questions.json` and confirm
+  ANS-001/005/009 move from FAIL/PARTIAL to PASS with real tool-call traces.
 
 ### 6. Conversation persistence ("saved state") — MEDIUM PRIORITY
 Users have no way to save a conversation and return to ask follow-up questions.
