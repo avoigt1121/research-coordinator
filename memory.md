@@ -168,14 +168,76 @@ No further action needed on this item.
     - **Severity**: this is a core-capability bug — TF activity / pathway
       scoring is the system's primary value proposition, and on the live
       Space it appears to silently fall back to plausible-sounding fabricated
-      output rather than erroring visibly. **Not yet root-caused further**
-      (didn't inspect `DecoupleRpy_Agent`'s tool-registration code this
-      session) or fixed. Open hypothesis: the router's dispatch path uses
+      output rather than erroring visibly.
+    - **Root-caused (follow-up, same session) to MCP tool-loading in
+      `DecoupleRpy_Agent/gradio_ui.py`.** Traced the tool pipeline:
+      `server.py` mounts 10 FastMCP sub-servers (incl.
+      `bulk_dataset_mcp` → `dataset_score_bulk_samples`,
+      `dataset_compare_activity_by_group`) with `mcp.mount(..., prefix=None)`
+      — **confirmed locally** via a live stdio `list_tools()` call: all 47
+      tools, including `dataset_score_bulk_samples` and
+      `decoupler_load_and_filter_data`, are discovered under their exact
+      unprefixed names (matches what the system prompt documents — naming is
+      NOT the bug).
+      `agent.execute()` (`src/agent.py:244`) calls
+      `self.python_executor.send_functions(self.get_all_tool_functions())`
+      before every step, and `get_all_tool_functions()` →
+      `tool_manager.get_all_functions()` reads from `_tool_catalog`
+      (`tool_manager.py:312-318`) — so *if* `_tool_catalog` contains the 47
+      MCP tools, they'd be injected. The diagnostic's sandbox `dir()`/
+      `globals()` showed **only** the 6 hardcoded fallback helpers from
+      `PythonExecutor.reset()` (`python_executor.py:39-64`:
+      `write_text_file`, `write_dataframe_to_csv`, `write_dataframe_to_tsv`,
+      `create_directory`, plus `pd`/`np`/`os`/`Path`/`scipy`) — meaning
+      `_tool_catalog` had **zero** MCP tools for that session.
+      `_tool_catalog` is populated two ways in `gradio_ui.py`:
+      1. **Pre-warm path** (`_prewarm_mcp()`, ~lines 138-158, background
+         thread at app startup): spawns a seed `CodeAgent`, calls
+         `seed.add_mcp(mcp_config_path)`, caches
+         `seed.tool_manager.mcp_manager.mcp_functions` into
+         `self._mcp_cache`. **Any exception is silently caught** (`except
+         Exception as exc: print(...)`) leaving `self._mcp_cache = {}`.
+      2. **Per-session restore/fallback** (`interact_with_agent()`, ~lines
+         710-745): waits up to 180s
+         (`self._mcp_ready.wait(timeout=180)`) for the pre-warm; if
+         `self._mcp_cache` is non-empty, restores it into
+         `mgr.mcp_manager.mcp_functions` and re-registers `_tool_catalog`.
+         If empty, falls back to `session_state["agent"].add_mcp(...)`
+         directly — **also wrapped in a silent `except Exception as e: print(f"⚠️
+         Could not load MCP tools: {e}")`** that doesn't surface to the
+         chat/agent or block the run.
+      **Net effect**: if `add_mcp()` (which spawns the `server.py` MCP
+      subprocess via stdio) fails or doesn't finish in either path on the
+      live Space — plausible causes: HF Space container resource limits
+      during cold start, the `rpy2`/R install warning seen in
+      `server.py`'s own startup (`"R dependency installation failed, limma
+      may be unavailable: rpy2 is not installed"`), or simply the 180s
+      pre-warm timeout racing the `cache-preloader` background thread
+      (`src/cache.py: preload_datasets`) for resources — the session
+      proceeds with **zero MCP tools** and no visible error. The agent then
+      behaves exactly as observed: tries documented tool names, gets
+      `NameError`, explores the codebase to "rediscover" tools that were
+      never injected, and after burning its step budget on real-but-useless
+      exploration (writing real intermediate scanpy code), produces a
+      plausible-but-fabricated "Final Solution".
+      **Confirmed NOT the bug**: tool naming/mounting/prefixing (works
+      correctly in a clean local `add_mcp()` call, ~10s, 47 tools).
+      **Proposed fix** (not implemented): (1) don't silently swallow
+      exceptions in `_prewarm_mcp()` and the `interact_with_agent()` fallback
+      — log loudly and/or surface a chat notice; (2) if
+      `tool_manager.get_all_functions()` returns 0 MCP tools at session
+      start, refuse/flag analysis requests instead of letting the agent
+      proceed (mirrors the "Capabilities & Out-of-Scope" idea above, but for
+      a *runtime* tool-availability failure rather than a scope gap); (3)
+      add a startup self-check / health-check endpoint that reports
+      `len(get_all_tool_functions())` so this is observable without a live
+      diagnostic replay.
+    - Open hypothesis, not yet checked: the router's dispatch path uses
       `/lambda` + `/interact_with_agent` (the Space's "first" Gradio UI
       wiring); there's also a parallel `/lambda_2` +
       `/interact_with_agent_1` wiring (see `diag_api.py` finding,
-      2026-06-13) that might have a differently-configured agent/toolset —
-      worth checking whether that path has the scoring tools bound correctly.
+      2026-06-13) — worth checking whether that second wiring's session
+      setup has the same MCP-loading issue.
     - The earlier "trace-visibility / judge can't verify" framing (below,
       now superseded) is still *true as a secondary issue* — even successful
       tool calls are stripped from what the judge sees — but it is not the
