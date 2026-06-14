@@ -133,11 +133,60 @@ No further action needed on this item.
     "Executing Code" block) so the judge has grounding. Re-run
     ANS-001/005/009, INF-005/007/016, OOS-009/013 with this digest to see if
     PARTIAL/FAIL verdicts change.
-  - Dataset-selection-heuristics verification (the original motivation for
-    this rerun) is still inconclusive — re-run INF-005/007/016 once the
-    fabrication-digest follow-up above is in place, so the judge can confirm
-    whether the specialist states its chosen `dataset_id` + heuristic
-    rationale per the new prompt section.
+  - **Dataset-selection-heuristics (Known Issue #5) — VERIFIED WORKING**:
+    re-reading the raw responses, all three INFER_DATASET questions now state
+    a chosen `dataset_id` + rationale before proceeding, per the new prompt
+    section: INF-005/INF-007 pick `tcga_paad` ("largest curated... Knudsen
+    curation"), INF-016 picks `gse71729_moffitt` ("largest single available
+    cohort (n=357 samples)... most statistically robust"). The judge confirms
+    "satisfying the INFER_DATASET requirement" for all three — the only thing
+    holding them at PARTIAL is the shared fabrication/trace-visibility issue
+    above, not the dataset choice. No further action needed on Known Issue #5
+    beyond the trace-digest follow-up.
+  - **New finding — OOS-002/009/013 (REFUSE_OUT_OF_SCOPE, all 3 FAIL) share a
+    second root cause: no system has "out of scope" awareness.**
+    - **OOS-009** ("Fit a Kaplan-Meier curve and report the log-rank
+      p-value...") and **OOS-013** ("Deconvolve bulk tumor samples into
+      cell-type fractions") route correctly to `decouplerpy`
+      (`routing_correct: true`), but `DecoupleRpy_Agent`'s `prompts.yaml` has
+      no general "capabilities/out-of-scope" section — only *per-dataset*
+      `refusal_rules`. decoupleR doesn't do survival statistics (KM curves,
+      log-rank, Cox models) or cell-type deconvolution (CIBERSORTx/BisqueRNA
+      territory); with no guidance saying so, the agent attempts a
+      workaround and produces an elaborate "results" narrative the judge
+      flags as fabricated. **Proposed fix**: add a "## Capabilities &
+      Out-of-Scope" section to `DecoupleRpy_Agent/prompts.yaml` listing
+      analysis types decoupleR doesn't perform (survival stats, cell-type
+      deconvolution, anything requiring a different statistical
+      framework), noting decoupleR *activity scores* can feed into such
+      downstream tools but the agent itself shouldn't compute/fabricate
+      them, and instructing the agent to state the limitation + suggest the
+      appropriate external tool (lifelines/survival for KM, CIBERSORTx/
+      BisqueRNA for deconvolution) instead of attempting a substitute
+      analysis.
+    - **OOS-002** ("Design qPCR primers for KRAS") is a different case —
+      it's not a bioinformatics-analysis question at all (wet-lab protocol
+      design), and `routing_correct: false` (misroutes to `direct`).
+      research-coordinator's `routing_prompt` has no "out of scope" category
+      — "Design qPCR primers for KRAS" matches "Conceptual question about
+      biology, genes, pathways" (mentions a gene) and routes `direct`; the
+      `coordinator_system_prompt` then says the coordinator has "deep
+      knowledge of gene biology" with no scope boundary, so Claude happily
+      designs primers. **Proposed fix**: add an "out of scope" category to
+      `prompts.yaml`'s `routing_prompt` (wet-lab/protocol questions
+      unrelated to PDAC transcriptomics analysis) and a corresponding
+      instruction in `coordinator_system_prompt` to decline such questions
+      directly, explaining the system's scope (PDAC decoupleR-based
+      transcriptomic analysis) rather than answering from general knowledge.
+    - Neither fix implemented yet this session — both are prompt-only
+      changes, low risk, good candidates for the next session.
+  - **ANS-021** ("...using a ranked logFC list I provide", PARTIAL) is a
+    likely eval *question-design* issue, not an agent bug: the agent
+    correctly sets up GSEA infrastructure, loads TCGA-PAAD, and asks the user
+    to paste their ranked logFC list — but `run_eval.py` is single-turn, so
+    no list is ever provided and the agent can't proceed to EXECUTE. Either
+    rephrase ANS-021 to include inline data, or accept "asks for required
+    input" as a valid outcome for this question.
 - Confirmed Known Issue #8-equivalent (docx claim that `_FALLBACK_DATASETS`
   in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
   matching the current biodata-registry manifest set. No fix needed.
