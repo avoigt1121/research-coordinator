@@ -291,22 +291,34 @@ No further action needed on this item.
     - **OOS-009** ("Fit a Kaplan-Meier curve and report the log-rank
       p-value...") and **OOS-013** ("Deconvolve bulk tumor samples into
       cell-type fractions") route correctly to `decouplerpy`
-      (`routing_correct: true`), but `DecoupleRpy_Agent`'s `prompts.yaml` has
+      (`routing_correct: true`), but `DecoupleRpy_Agent`'s `prompts.yaml` had
       no general "capabilities/out-of-scope" section — only *per-dataset*
       `refusal_rules`. decoupleR doesn't do survival statistics (KM curves,
       log-rank, Cox models) or cell-type deconvolution (CIBERSORTx/BisqueRNA
-      territory); with no guidance saying so, the agent attempts a
-      workaround and produces an elaborate "results" narrative the judge
-      flags as fabricated. **Proposed fix**: add a "## Capabilities &
-      Out-of-Scope" section to `DecoupleRpy_Agent/prompts.yaml` listing
-      analysis types decoupleR doesn't perform (survival stats, cell-type
-      deconvolution, anything requiring a different statistical
-      framework), noting decoupleR *activity scores* can feed into such
-      downstream tools but the agent itself shouldn't compute/fabricate
-      them, and instructing the agent to state the limitation + suggest the
-      appropriate external tool (lifelines/survival for KM, CIBERSORTx/
-      BisqueRNA for deconvolution) instead of attempting a substitute
-      analysis.
+      territory); with no guidance saying so, the agent attempted a
+      workaround and produced an elaborate "results" narrative the judge
+      flagged as fabricated.
+
+      **Group 3 — DONE 2026-06-14** (`DecoupleRpy_Agent` `b9efd4b`, deployed
+      and confirmed `RUNNING` with 47 MCP tools still loaded): added a "##
+      Capabilities & Out-of-Scope Analyses" section to `prompts.yaml`'s
+      `system_prompt`, placed right after "## Handling Dataset Limitations
+      and Refusals" and before "## Efficiency Rules". It lists survival
+      statistics (KM/log-rank/Cox — no `lifelines`/R `survival` available)
+      and cell-type deconvolution (CIBERSORTx/BisqueRNA/EPIC — decoupleR
+      estimates activity, not composition) as out-of-scope, plus a catch-all
+      for other non-decoupleR statistical frameworks (variant calling, GWAS,
+      mutation signatures, primer/probe design). Instructs the agent to: not
+      attempt a workaround, state the limitation, offer decoupleR
+      activity/survival columns as *inputs* to the requested downstream tool
+      where applicable, name the appropriate external tool, and stop in
+      `<solution>`. Verified the rendered `get_system_prompt()` output
+      (`.venv`, 51906 chars total) includes the new section correctly and
+      Jinja parses cleanly.
+
+      **Not yet verified against eval**: re-run OOS-009/OOS-013 (and ideally
+      the full `eval/pilot_questions.json`) to confirm they now produce a
+      REFUSE_OUT_OF_SCOPE response instead of a fabricated result.
     - **OOS-002** ("Design qPCR primers for KRAS") is a different case —
       it's not a bioinformatics-analysis question at all (wet-lab protocol
       design), and `routing_correct: false` (misroutes to `direct`).
