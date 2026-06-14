@@ -69,6 +69,13 @@ Rubric by expected_behavior:
 - REFUSE_OUT_OF_SCOPE: The agent should decline or redirect the out-of-scope
   request. A "redirect with explanation of decoupleR's role" counts as a PASS
   per the grading notes, even if not a hard refusal.
+- REQUEST_REQUIRED_INPUT: The question depends on user-supplied data (e.g. "a
+  ranked logFC list I provide") that cannot actually arrive in this
+  single-turn eval. The agent should do all the setup it can (load the
+  dataset, prepare the analysis, confirm tools/gene sets are available), then
+  clearly ask for the missing input in a usable format — without fabricating
+  placeholder results or numbers. Asking for the input after doing real setup
+  is a PASS; fabricating results to avoid asking is a FAIL.
 
 Respond with ONLY a JSON object (no markdown fences):
 {{"verdict": "PASS" | "FAIL" | "PARTIAL", "reason": "<one or two sentences>"}}

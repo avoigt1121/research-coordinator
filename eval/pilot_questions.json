@@ -47,8 +47,8 @@
         "tcga_paad"
       ],
       "decoupler": "gsea + Hallmark",
-      "expected_behavior": "EXECUTE",
-      "notes": "User supplies ranks; clearly in-scope."
+      "expected_behavior": "REQUEST_REQUIRED_INPUT",
+      "notes": "User says they will provide a ranked logFC list, but this is a single-turn eval \u2014 no list ever arrives. The agent should do all the setup it can (load tcga_paad, confirm GSEA/Hallmark tooling available) and then ask for the list in a usable format, rather than fabricating GSEA results."
     },
     {
       "id": "INF-001",
