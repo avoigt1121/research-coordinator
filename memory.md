@@ -222,16 +222,38 @@ No further action needed on this item.
       plausible-but-fabricated "Final Solution".
       **Confirmed NOT the bug**: tool naming/mounting/prefixing (works
       correctly in a clean local `add_mcp()` call, ~10s, 47 tools).
-      **Proposed fix** (not implemented): (1) don't silently swallow
-      exceptions in `_prewarm_mcp()` and the `interact_with_agent()` fallback
-      — log loudly and/or surface a chat notice; (2) if
-      `tool_manager.get_all_functions()` returns 0 MCP tools at session
-      start, refuse/flag analysis requests instead of letting the agent
-      proceed (mirrors the "Capabilities & Out-of-Scope" idea above, but for
-      a *runtime* tool-availability failure rather than a scope gap); (3)
-      add a startup self-check / health-check endpoint that reports
-      `len(get_all_tool_functions())` so this is observable without a live
+      **Fix implemented (same session, `DecoupleRpy_Agent/gradio_ui.py`,
+      uncommitted as of end of session)**: (1) `_prewarm_mcp()` and the
+      `interact_with_agent()` fallback `add_mcp()` no longer swallow
+      exceptions silently — both now `traceback.print_exc()` on failure, and
+      `_prewarm_mcp()` logs an explicit warning if `add_mcp()` completes but
+      discovers 0 MCP tools; (2) after the per-session tool
+      cache-restore/fallback, `interact_with_agent()` now records
+      `session_state["mcp_tool_count"]` via
+      `agent.get_tool_statistics()["by_source"]["mcp"]`, and if it's 0, the
+      very next thing the chat does is yield a red "Analysis tools
+      unavailable" notice and `return` — refusing the request instead of
+      letting the LLM explore/fabricate; (3) added
+      `_mcp_health_markdown()` + `demo.load(...)` wiring a status line
+      (`mcp_status = gr.Markdown(...)`) near the top of the UI, showing
+      either "decoupleR analysis tools: 47 loaded ✓" or a red "Analysis
+      tools failed to load (0 ... )" banner — observable without a live
       diagnostic replay.
+      **Self-test note**: while testing these fixes locally, an unactivated
+      venv (`PATH` lacking a bare `python` binary — only `python3`/
+      `.venv/bin/python` exist) made `add_mcp()` fail with
+      `FileNotFoundError: [Errno 2] No such file or directory: 'python'`
+      (`mcp_config.yaml`'s `decouplerpy` server has `command: ["python",
+      "server.py"]`). Re-ran with `.venv/bin` prepended to `PATH` →
+      succeeded, 47 tools discovered. **This was a test-harness artifact,
+      not a live-Space bug** — the HF Space's own startup command requires
+      `python` to already be resolvable on PATH (it's how the Space launches
+      `gradio_ui.py`/`app.py` in the first place), so the same `PATH` is
+      available to the `add_mcp()` subprocess. No `mcp_config.yaml` change
+      needed. The real (and now-fixed) failure mode on the live Space is
+      whatever silent exception was being swallowed at the two call sites
+      above — still not identified with certainty, but no longer able to
+      fail silently after this fix.
     - **Hypothesis checked and closed**: the `/lambda_2` +
       `/interact_with_agent_1` pair is NOT a separately configured
       agent/toolset. `gradio_ui.py` (~lines 1073-1091) wires the *same*
