@@ -223,13 +223,21 @@ class ResearchRouter:
                 api_name="/interact_with_agent",
             )
 
-            # If the agent hit its step limit, keep clicking "Continue" (via the
-            # /handle_continue endpoint the Gradio UI's Continue button calls)
-            # until it produces a real solution. Capped to avoid an infinite loop
-            # if the agent never converges.
+            # If the agent hit its step limit before producing a solution, keep
+            # clicking "Continue" (via the /handle_continue endpoint the Gradio
+            # UI's Continue button calls) until it produces a real solution.
+            # Capped to avoid an infinite loop if the agent never converges.
+            #
+            # Note: a "Step limit reached" notice can appear *after* a Final
+            # Solution in chatbot_history (the step that produced the solution
+            # also happened to hit the limit). In that case `solution` is
+            # already set, so don't call /handle_continue — doing so makes the
+            # agent "continue" a task it already finished, producing a junk
+            # acknowledgement (e.g. "standing by for your next request") that
+            # would otherwise overwrite the real solution on the next pass.
             for _ in range(MAX_CONTINUES):
                 solution, last_assistant, step_limit_hit = self._extract_response(result)
-                if not step_limit_hit:
+                if solution or not step_limit_hit:
                     break
                 result = gc.predict(chatbot=result, api_name="/handle_continue")
 

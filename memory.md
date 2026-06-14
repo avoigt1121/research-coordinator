@@ -85,25 +85,59 @@ No further action needed on this item.
     survival split + PROGENy ULM) that completed with a full solution, not a
     hang — but the doubled avg latency overall is a UX consideration (no
     incremental feedback during long specialist runs).
-  - **New finding — fabrication pattern**: the LLM judge repeatedly flagged
-    ANS-001, ANS-005, ANS-009, INF-005, INF-007, INF-016, OOS-009, and
-    OOS-013 as likely *fabricating* results — precise-looking numbers
-    presented with no visible code/tool execution trace. Worth investigating
-    whether the specialist is actually running its tools for these or
-    narrating plausible-sounding output.
-  - **New finding — context-bleed-looking responses**: LIM-017, NOD-003, and
-    NOD-010 returned responses that look like replies to a *different,
-    unrelated* turn (e.g. NOD-003 returned "No actionable user instruction
-    has been received in this turn. I am ready and waiting."; NOD-010
-    returned "You're welcome — standing by for your next request."; LIM-017
-    returned "Acknowledged. No analysis requested, none performed."). These
-    read like session-state bleed in the gradio_client dispatch across
-    consecutive eval questions and warrant follow-up.
+  - **New finding — "context-bleed" responses on LIM-017/NOD-003/NOD-010 —
+    ROOT-CAUSED AND FIXED 2026-06-13** (same session, follow-up
+    investigation): these weren't session bleed at all — `gradio_client`
+    generates a fresh `session_hash`/`gr.State` per `Client()` instance, so
+    sessions ARE isolated. The real bug was in
+    `ResearchRouter.dispatch_to_specialist`'s auto-continue loop
+    (`router.py`, the `98c2a61` "auto-continue past step limit" logic): when
+    the Space's `chatbot_history` contains a "✅ Final Solution" block
+    **followed by** a "⏸ Step limit reached" notice (the step that produced
+    the solution also happened to be the limit-hitting step — common, since
+    `interact_with_agent` always appends the notice when
+    `step_limit_hit=True` regardless of whether a solution preceded it),
+    `_extract_response` correctly returns both `solution` (set) and
+    `step_limit_hit=True`. The old loop condition `if not step_limit_hit:
+    break` ignored the already-found `solution` and called
+    `/handle_continue` anyway — telling an agent that had *already finished*
+    to keep going. The agent's "continuation" reply is a confused
+    acknowledgement ("You're welcome — standing by for your next request.",
+    "Acknowledged. No analysis requested, none performed.",
+    "No actionable user instruction has been received in this turn..."),
+    which (since it's *also* rendered with `solution-content` styling)
+    overwrites the original good `solution` on the next loop iteration and
+    becomes the final returned text.
+    **Fix**: changed the loop condition to `if solution or not
+    step_limit_hit: break` — if a Final Solution was already produced, don't
+    call `/handle_continue` even if the step-limit notice also fired.
+    Verified live: replayed NOD-003 ("Run decoupleR on the Chan-Seng-Yue PDAC
+    dataset.") with the fix in place — now correctly returns a REFUSE_NO_DATA
+    response (explains Chan-Seng-Yue isn't registered, lists the 16
+    registered datasets, offers alternatives) instead of "No actionable user
+    instruction...". This would grade PASS.
+  - **New finding — "fabrication" judge comments on ANS-001, ANS-005,
+    ANS-009, INF-005, INF-007, INF-016, OOS-009, OOS-013 — likely an eval
+    *methodology* gap, not an agent bug**: a live diagnostic replay of the
+    NOD-010 prompt (same session) showed the agent runs a real multi-step
+    tool loop — 7 steps of "⚡ Executing Code" / "📊 Execution Result" blocks
+    with actual code, file loads, and outputs — before producing the Final
+    Solution. But `_extract_response` (`router.py`) only returns the Final
+    Solution div; all intermediate tool-execution messages are discarded
+    before the result reaches `eval/run_eval.py`'s LLM judge. The judge sees
+    only a narrative summary with precise numbers and *correctly* notes it
+    can't verify them — but this is because the evidence was stripped, not
+    necessarily because the agent fabricated. **Planned**: have
+    `dispatch_to_specialist` (or a new eval-only variant) also return a short
+    tool-execution-trace digest (e.g., step count + first line of each
+    "Executing Code" block) so the judge has grounding. Re-run
+    ANS-001/005/009, INF-005/007/016, OOS-009/013 with this digest to see if
+    PARTIAL/FAIL verdicts change.
   - Dataset-selection-heuristics verification (the original motivation for
-    this rerun) is inconclusive from this run alone — INF-005/007/016 are
-    among the PARTIAL/fabrication-flagged results, so it's unclear whether
-    the new heuristics are firing correctly in practice. Re-check once the
-    context-bleed and fabrication issues are understood.
+    this rerun) is still inconclusive — re-run INF-005/007/016 once the
+    fabrication-digest follow-up above is in place, so the judge can confirm
+    whether the specialist states its chosen `dataset_id` + heuristic
+    rationale per the new prompt section.
 - Confirmed Known Issue #8-equivalent (docx claim that `_FALLBACK_DATASETS`
   in `gradio_ui.py` has only 15 entries) is incorrect — it has all 16,
   matching the current biodata-registry manifest set. No fix needed.
