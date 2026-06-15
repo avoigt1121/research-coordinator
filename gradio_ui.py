@@ -102,22 +102,30 @@ class CoordinatorUI:
         history[-1]["content"] = routing_note
         yield history, "", call_log
 
-        # Dispatch and get result, passing dataset constraint if set. Also
-        # request the execution trace (pure post-processing of the chatbot
-        # history already on the wire — no extra calls/latency) for the
-        # "What happened?" panel.
+        # Stream the specialist's steps live. dispatch_to_specialist_stream
+        # yields (display_text, trace, done) frames as the agent works; the
+        # trace digest is pure post-processing of the chatbot history already on
+        # the wire (no extra calls/latency) and feeds the "What happened?" panel.
         all_ids = [v for _, v in self._dataset_choices]
         constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
-        result, trace = self._router.dispatch_to_specialist(
-            agent_id, message, dataset_constraint=constraint, return_trace=True
-        )
 
-        full_response = (
-            f"_Routing to **{agent_name}** for computation._\n\n"
-            f"**Result from {agent_name}:**\n\n{result}"
-        )
-        history[-1]["content"] = full_response
-        yield history, "", self._format_call_log(trace)
+        current_call_log = call_log
+        for text, trace, done in self._router.dispatch_to_specialist_stream(
+            agent_id, message, dataset_constraint=constraint
+        ):
+            if trace:
+                current_call_log = self._format_call_log(trace)
+            if done:
+                history[-1]["content"] = (
+                    f"_Routing to **{agent_name}** for computation._\n\n"
+                    f"**Result from {agent_name}:**\n\n{text}"
+                )
+            else:
+                # Live progress while the agent is still working.
+                history[-1]["content"] = (
+                    f"_**{agent_name}** is working…_\n\n{text}"
+                )
+            yield history, "", current_call_log
 
     def _respond(self, message: str, history: list, selected_datasets: list,
                   pending_specialist: dict | None, call_log: str):

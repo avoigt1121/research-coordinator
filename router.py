@@ -222,20 +222,46 @@ class ResearchRouter:
         from real computation rather than inferring fabrication from the prose
         alone.
         """
-        def _ret(value, trace=""):
-            return (value, trace) if return_trace else value
+        # Backward-compatible blocking API: drain the streaming generator and
+        # return only the final frame. Non-UI callers (the eval harness) use
+        # this; the Gradio UI calls dispatch_to_specialist_stream directly to
+        # render the agent's steps live.
+        final_text, final_trace = "", ""
+        for text, trace, _done in self.dispatch_to_specialist_stream(
+            agent_id, message, dataset_constraint=dataset_constraint
+        ):
+            final_text, final_trace = text, trace
+        return (final_text, final_trace) if return_trace else final_text
 
+    def dispatch_to_specialist_stream(self, agent_id: str, message: str,
+                                       dataset_constraint: list | None = None):
+        """Generator yielding (display_text, trace_digest, done) frames as the
+        specialist streams its workflow steps live.
+
+        The specialist's /interact_with_agent is a Gradio *generator* endpoint
+        (it yields a gr.ChatMessage per LangGraph step), so we submit() it and
+        iterate the returned Job — gradio_client's Job.__next__ surfaces each
+        intermediate output as it lands on the wire. This adds NO latency vs the
+        old predict() path: those step frames were always being transmitted;
+        predict() simply discarded every frame but the last. Here we render each
+        as live progress, then emit the polished solution as the final
+        (done=True) frame.
+
+        Frames:
+          - (progress_markdown, trace_digest, False) for each streamed step
+          - (solution_or_fallback, final_trace, True) exactly once, at the end
+        On any error a single (error_message, "", True) frame is yielded.
+        """
         agent = self._agents.get(agent_id)
         if agent is None:
-            return _ret(f"[Error] Unknown agent: {agent_id}")
+            yield (f"[Error] Unknown agent: {agent_id}", "", True)
+            return
 
         hf_space = self._resolve_hf_space(agent)
 
-        # Optional HF token so the coordinator can reach a PRIVATE specialist
-        # Space (e.g. a dev Space). Prod's specialist is public, so this is
-        # unset there and we omit the kwarg entirely — GradioClient is then
-        # constructed exactly as before. gradio_client's auth kwarg is `token`
-        # (not `hf_token`), so we only add it when a token is actually present.
+        # Optional HF token (see dispatch_to_specialist): prod's specialist is
+        # public so we omit the auth kwarg; gradio_client's kwarg is `token`,
+        # passed only when HF_TOKEN is actually set (e.g. a private dev Space).
         hf_token = os.environ.get("HF_TOKEN") or None
         client_kwargs: dict = {"httpx_kwargs": {"timeout": SPECIALIST_TIMEOUT_SECONDS}}
         if hf_token:
@@ -252,59 +278,68 @@ class ResearchRouter:
             message = constraint_note + message
 
         if not GRADIO_CLIENT_AVAILABLE:
-            return _ret(
+            yield (
                 f"[Stub] gradio_client is not installed. "
-                f"Would dispatch to {agent['name']} ({hf_space}) with: {message}"
+                f"Would dispatch to {agent['name']} ({hf_space}) with: {message}",
+                "", True,
             )
+            return
 
         try:
-            # DecoupleRpy's interact_with_agent reads the query from a hidden gr.State,
-            # set by a separate /lambda call. This two-step dispatch occasionally races:
-            # /interact_with_agent can read the state before /lambda's write to it
-            # commits, so the agent sees an empty query and replies with a generic
-            # "no instruction received" message. Detect that and retry with a fresh
-            # session (new gradio_client = new session_hash) before giving up.
-            for attempt in range(MAX_DISPATCH_RETRIES):
+            # DecoupleRpy's interact_with_agent reads the query from a hidden
+            # gr.State set by a separate /lambda call. This two-step dispatch
+            # occasionally races: /interact_with_agent can read the state before
+            # /lambda's write commits, so the agent sees an empty query and
+            # replies generically. Detect that and retry with a fresh session
+            # (new gradio_client = new session_hash) before giving up.
+            result = None
+            gc = None
+            for _attempt in range(MAX_DISPATCH_RETRIES):
                 gc = GradioClient(hf_space, **client_kwargs)
-                # Step 1: call /lambda to set that state for this session.
+                # Step 1: stash the query in gr.State for this session.
                 gc.predict(x=message, api_name="/lambda")
-                # Step 2: call /interact_with_agent with empty history — query comes from state.
-                result = gc.predict(
-                    chatbot_history=[],
-                    api_name="/interact_with_agent",
-                )
+                # Step 2: submit (not predict) so we can iterate intermediate
+                # frames as the agent streams its steps.
+                job = gc.submit(chatbot_history=[], api_name="/interact_with_agent")
+                result = None
+                for frame in job:
+                    result = frame
+                    yield (self._render_progress(frame),
+                           self._extract_execution_trace(frame), False)
+                if result is None:
+                    result = job.result()
                 if self._echoed_query(result, message):
                     break
 
             # If the agent hit its step limit before producing a solution, keep
-            # clicking "Continue" (via the /handle_continue endpoint the Gradio
-            # UI's Continue button calls) until it produces a real solution.
-            # Capped to avoid an infinite loop if the agent never converges.
+            # clicking "Continue" (via /handle_continue) until it produces a
+            # real solution — also streamed. Capped against non-convergence.
             #
             # Note: a "Step limit reached" notice can appear *after* a Final
-            # Solution in chatbot_history (the step that produced the solution
-            # also happened to hit the limit). In that case `solution` is
-            # already set, so don't call /handle_continue — doing so makes the
-            # agent "continue" a task it already finished, producing a junk
-            # acknowledgement (e.g. "standing by for your next request") that
-            # would otherwise overwrite the real solution on the next pass.
+            # Solution (the solution-producing step also hit the limit). In that
+            # case `solution` is already set, so don't continue — doing so makes
+            # the agent "continue" a finished task and overwrite the real answer.
             for _ in range(MAX_CONTINUES):
                 solution, last_assistant, step_limit_hit = self._extract_response(result)
                 if solution or not step_limit_hit:
                     break
-                result = gc.predict(chatbot=result, api_name="/handle_continue")
+                job = gc.submit(chatbot=result, api_name="/handle_continue")
+                cont = None
+                for frame in job:
+                    cont = frame
+                    yield (self._render_progress(frame),
+                           self._extract_execution_trace(frame), False)
+                result = cont if cont is not None else job.result()
 
-            trace = self._extract_execution_trace(result) if return_trace else ""
-            if solution:
-                return _ret(solution, trace)
-            if last_assistant:
-                return _ret(last_assistant, trace)
-            return _ret(str(result), trace)
+            solution, last_assistant, _ = self._extract_response(result)
+            final = solution or last_assistant or str(result)
+            yield (final, self._extract_execution_trace(result), True)
         except Exception as exc:
-            return _ret(
+            yield (
                 f"[{agent['name']}] The specialist agent could not be reached "
                 f"(Space may be cold or loading). Error: {exc}\n\n"
-                "Please try again in a moment, or rephrase your question for a direct answer."
+                "Please try again in a moment, or rephrase your question for a direct answer.",
+                "", True,
             )
 
     @staticmethod
@@ -352,6 +387,32 @@ class ResearchRouter:
             if "Final Solution" in content or "solution-content" in content:
                 solution = content
         return solution, last_assistant, step_limit_hit
+
+    @staticmethod
+    def _render_progress(chatbot_history: list, max_chars: int = 1500) -> str:
+        """Render a live 'agent is working' view from a partial chatbot history.
+
+        Shows the most recent meaningful assistant step (HTML stripped) so the
+        coordinator chat reflects what the specialist is doing right now. The
+        full step-by-step evidence accumulates separately in the "What
+        happened?" panel via _extract_execution_trace.
+        """
+        latest = ""
+        if isinstance(chatbot_history, list):
+            for msg in chatbot_history:
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                content = (msg.get("content") or "").strip()
+                if not content:
+                    continue
+                if "Full run log saved" in content or "huggingface.co/datasets" in content:
+                    continue
+                latest = content
+        text = re.sub(r"<[^>]+>", "", latest)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        if len(text) > max_chars:
+            text = "…" + text[-max_chars:]
+        return text or "_…thinking…_"
 
     @staticmethod
     def _extract_execution_trace(chatbot_history: list, max_chars: int = 6000) -> str:
