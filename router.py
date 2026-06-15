@@ -6,6 +6,7 @@ Routes user messages to either:
 from __future__ import annotations
 
 import json
+import re
 import yaml
 import httpx
 from pathlib import Path
@@ -190,15 +191,30 @@ class ResearchRouter:
             )
         return None
 
-    def dispatch_to_specialist(self, agent_id: str, message: str, dataset_constraint: list | None = None) -> str:
+    def dispatch_to_specialist(self, agent_id: str, message: str, dataset_constraint: list | None = None,
+                                return_trace: bool = False):
         """Send message to specialist HF Space via gradio_client and return result.
 
         Phase 1: real dispatch is implemented; the Space may be cold so we
         wrap in try/except and return a helpful stub on failure.
+
+        By default returns just the final solution string (what the user sees).
+        If `return_trace=True`, returns a `(solution, trace_digest)` tuple where
+        `trace_digest` is a compact summary of the agent's actual tool-execution
+        steps (code-output observations + tool names), extracted from the full
+        chatbot history the Space returns. This trace is pure post-processing of
+        data already on the wire — it is NOT fed back into the specialist's LLM
+        context, so it adds no token cost or latency to the agent run. It lets a
+        caller (e.g. the eval judge) verify that numbers in the solution came
+        from real computation rather than inferring fabrication from the prose
+        alone.
         """
+        def _ret(value, trace=""):
+            return (value, trace) if return_trace else value
+
         agent = self._agents.get(agent_id)
         if agent is None:
-            return f"[Error] Unknown agent: {agent_id}"
+            return _ret(f"[Error] Unknown agent: {agent_id}")
 
         hf_space = agent["hf_space"]
 
@@ -213,7 +229,7 @@ class ResearchRouter:
             message = constraint_note + message
 
         if not GRADIO_CLIENT_AVAILABLE:
-            return (
+            return _ret(
                 f"[Stub] gradio_client is not installed. "
                 f"Would dispatch to {agent['name']} ({hf_space}) with: {message}"
             )
@@ -255,13 +271,14 @@ class ResearchRouter:
                     break
                 result = gc.predict(chatbot=result, api_name="/handle_continue")
 
+            trace = self._extract_execution_trace(result) if return_trace else ""
             if solution:
-                return solution
+                return _ret(solution, trace)
             if last_assistant:
-                return last_assistant
-            return str(result)
+                return _ret(last_assistant, trace)
+            return _ret(str(result), trace)
         except Exception as exc:
-            return (
+            return _ret(
                 f"[{agent['name']}] The specialist agent could not be reached "
                 f"(Space may be cold or loading). Error: {exc}\n\n"
                 "Please try again in a moment, or rephrase your question for a direct answer."
@@ -312,6 +329,53 @@ class ResearchRouter:
             if "Final Solution" in content or "solution-content" in content:
                 solution = content
         return solution, last_assistant, step_limit_hit
+
+    @staticmethod
+    def _extract_execution_trace(chatbot_history: list, max_chars: int = 6000) -> str:
+        """Build a compact digest of the agent's real tool-execution steps.
+
+        Pulls the "Code Output" execution-result blocks (the actual tool/code
+        outputs the agent observed) and the tool/function calls out of the full
+        chatbot history, stripping the HTML chrome the Gradio UI wraps them in.
+        This is what lets a judge confirm whether numbers in the final solution
+        came from real computation. The final-solution block itself is excluded
+        (we want the *evidence*, not the narrative). Capped to `max_chars` to
+        keep downstream prompts bounded; if truncated, keeps the most recent
+        steps (closest to the reported solution).
+        """
+        if not isinstance(chatbot_history, list) or not chatbot_history:
+            return ""
+
+        def _strip_html(text: str) -> str:
+            text = re.sub(r"<[^>]+>", "", text)
+            return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        blocks: list[str] = []
+        for msg in chatbot_history:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "") or ""
+            if not content.strip():
+                continue
+            # Skip the final solution and the HF log-link notice — we want the
+            # upstream execution evidence, not the polished answer.
+            if "Final Solution" in content or "solution-content" in content:
+                continue
+            if "Full run log saved" in content or "huggingface.co/datasets" in content:
+                continue
+            cleaned = _strip_html(content)
+            if not cleaned:
+                continue
+            # Keep the steps that carry real evidence: executed code and the
+            # tool/code outputs the agent observed.
+            if "Code Output" in cleaned or "Executing Code" in cleaned or "Execution Result" in cleaned:
+                blocks.append(cleaned)
+
+        digest = "\n\n---\n\n".join(blocks)
+        if len(digest) > max_chars:
+            # Keep the tail (most recent steps, nearest the reported numbers).
+            digest = "...[earlier steps truncated]...\n\n" + digest[-max_chars:]
+        return digest
 
     def agent_display_name(self, agent_id: str) -> str:
         agent = self._agents.get(agent_id, {})

@@ -50,9 +50,27 @@ Grading notes: {notes}
 For context, this question was routed to: {route_taken}
 {route_detail}
 
---- AGENT RESPONSE ---
+--- AGENT RESPONSE (the final answer the user sees) ---
 {response}
 --- END RESPONSE ---
+
+--- EXECUTION TRACE (the agent's actual tool calls + code outputs; NOT shown to the user) ---
+{execution_trace}
+--- END EXECUTION TRACE ---
+
+IMPORTANT — judging fabrication: The AGENT RESPONSE is a polished summary that
+deliberately omits the step-by-step computation. Do NOT infer fabrication merely
+because the response reads as a narrative without inline evidence of tool calls.
+Instead, judge fabrication against the EXECUTION TRACE:
+- If the trace shows real tool/code outputs (e.g. "Code Output:" blocks with
+  numbers, dataframes, file paths) and the response's headline numbers are
+  consistent with them, the results are REAL — do not penalize for fabrication.
+- Only treat numbers as fabricated if the EXECUTION TRACE is empty/absent, or
+  the response's key numbers clearly do not appear in and cannot be derived from
+  the trace.
+- If the trace is empty AND the response presents concrete numeric results,
+  that is fabrication (FAIL).
+- Minor rounding/formatting differences between trace and response are fine.
 
 Rubric by expected_behavior:
 - EXECUTE: The agent should have actually run the requested analysis and
@@ -91,8 +109,11 @@ def run_question(router: ResearchRouter, q: dict) -> dict:
     agent_id = classification.get("agent_id")
     reasoning = classification.get("reasoning", "")
 
+    execution_trace = ""
     if route == "specialist" and agent_id:
-        response_text = router.dispatch_to_specialist(agent_id, question)
+        response_text, execution_trace = router.dispatch_to_specialist(
+            agent_id, question, return_trace=True
+        )
         route_detail = f"Specialist: {router.agent_display_name(agent_id)}. Routing reasoning: {reasoning}"
     else:
         chunks = list(router.direct_response(question, []))
@@ -115,11 +136,13 @@ def run_question(router: ResearchRouter, q: dict) -> dict:
         "routing_reasoning": reasoning,
         "route_detail": route_detail,
         "response": response_text,
+        "execution_trace": execution_trace,
         "latency_seconds": round(latency, 1),
     }
 
 
 def judge_result(router: ResearchRouter, result: dict) -> dict:
+    trace = result.get("execution_trace") or "(no execution trace captured)"
     prompt = JUDGE_RUBRIC.format(
         question=result["question"],
         expected_behavior=result["expected_behavior"],
@@ -127,6 +150,7 @@ def judge_result(router: ResearchRouter, result: dict) -> dict:
         route_taken=result["route_taken"],
         route_detail=result["route_detail"],
         response=result["response"][:6000],  # cap to keep judge prompt bounded
+        execution_trace=trace[:6000],
     )
     response = router._client.messages.create(
         model=JUDGE_MODEL,
