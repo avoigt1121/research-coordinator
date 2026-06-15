@@ -31,4 +31,19 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force "https://anne-voigt:${HF_TOKEN}@huggingface.co/spaces/anne-voigt/research_coordinator" main
+          # Pushes can cluster (several commits in quick succession). HF's git
+          # backend may reject a force-push while the Space is still rebuilding
+          # from the previous push, making git exit 128 transiently. Retry with
+          # backoff so a momentary rejection self-recovers in the same run
+          # instead of leaving a spurious red X.
+          remote="https://anne-voigt:${HF_TOKEN}@huggingface.co/spaces/anne-voigt/research_coordinator"
+          for attempt in 1 2 3; do
+            if git push --force "$remote" main; then
+              echo "Push succeeded on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying in $((attempt * 15))s..."
+            sleep $((attempt * 15))
+          done
+          echo "Push still failing after 3 attempts."
+          exit 1
