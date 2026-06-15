@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import yaml
 import httpx
 from pathlib import Path
@@ -299,6 +300,7 @@ class ResearchRouter:
             # (new gradio_client = new session_hash) before giving up.
             result = None
             gc = None
+            start_ts = time.time()
             for _attempt in range(MAX_DISPATCH_RETRIES):
                 gc = GradioClient(hf_space, **client_kwargs)
                 # Step 1: stash the query in gr.State for this session.
@@ -309,7 +311,7 @@ class ResearchRouter:
                 result = None
                 for frame in job:
                     result = frame
-                    yield (self._render_progress(frame),
+                    yield (self._render_progress(frame, time.time() - start_ts),
                            self._extract_execution_trace(frame),
                            self._extract_panels(frame), False)
                 if result is None:
@@ -333,7 +335,7 @@ class ResearchRouter:
                 cont = None
                 for frame in job:
                     cont = frame
-                    yield (self._render_progress(frame),
+                    yield (self._render_progress(frame, time.time() - start_ts),
                            self._extract_execution_trace(frame),
                            self._extract_panels(frame), False)
                 result = cont if cont is not None else job.result()
@@ -396,48 +398,47 @@ class ResearchRouter:
                 solution = content
         return solution, last_assistant, step_limit_hit
 
-    @staticmethod
-    def _render_progress(chatbot_history: list, max_steps: int = 12,
-                          line_chars: int = 110) -> str:
-        """Render a stable, growing checklist of the agent's steps so far.
+    # Specialist step-type labels → friendly phase words, checked newest-first.
+    # The specialist emits these as ChatMessage titles; their *content* is the
+    # real work, which goes to the Data/Code/Logic panels — so the chat bubble
+    # only needs a calm status line, not the labels themselves.
+    _PHASE_LABELS = [
+        ("Executing Code", "executing code"),
+        ("Execution Result", "processing results"),
+        ("Current Plan", "planning"),
+        ("Thinking", "thinking"),
+    ]
 
-        Each streamed frame carries the *full* accumulated chatbot history, so
-        we list one short headline per assistant step rather than just the
-        latest message. Because every frame is a superset of the previous one,
-        the view only grows — it never flickers back to a placeholder or flashes
-        a step away before it can be read. The current (last) step is marked
-        with ⏳; the full detail for every step lives in the Data/Code/Logic
-        panels via _extract_panels.
+    @staticmethod
+    def _render_progress(chatbot_history: list, elapsed: float | None = None) -> str:
+        """Render a single calm status line: 'step N · <phase> · M:SS'.
+
+        Per-step labels ("Thinking", "Executing Code", …) are low-information
+        noise in the chat, so instead of listing them we summarise: the current
+        step number, the most recent phase, and wall-clock elapsed. The real
+        substance streams into the Data/Code/Logic panels.
         """
-        if not isinstance(chatbot_history, list):
-            return "_…thinking…_"
-        headlines: list[str] = []
-        for msg in chatbot_history:
-            if not isinstance(msg, dict) or msg.get("role") != "assistant":
-                continue
-            raw = msg.get("content", "") or ""
-            if "Final Solution" in raw or "solution-content" in raw:
-                continue
-            if "Full run log saved" in raw or "Step limit reached" in raw:
-                continue
-            # First non-empty line, HTML stripped, as a one-line headline.
-            text = re.sub(r"<[^>]+>", " ", raw)
-            line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-            if not line:
-                continue
-            line = re.sub(r"\s+", " ", line)
-            if len(line) > line_chars:
-                line = line[:line_chars].rstrip() + "…"
-            # Collapse consecutive duplicates (a step streams in incrementally).
-            if headlines and headlines[-1] == line:
-                continue
-            headlines.append(line)
-        if not headlines:
-            return "_…thinking…_"
-        shown = headlines[-max_steps:]
-        prefix = "…\n" if len(headlines) > max_steps else ""
-        lines = [f"- {h}" for h in shown[:-1]] + [f"- ⏳ {shown[-1]}"]
-        return prefix + "\n".join(lines)
+        step = 0
+        phase = "working"
+        if isinstance(chatbot_history, list):
+            for msg in chatbot_history:
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                raw = msg.get("content", "") or ""
+                nums = re.findall(r"Step (\d+)", raw)
+                if nums:
+                    step = max(step, max(int(n) for n in nums))
+                for key, label in ResearchRouter._PHASE_LABELS:
+                    if key in raw:
+                        phase = label  # later messages win → most recent phase
+                        break
+        parts = []
+        if step:
+            parts.append(f"step {step}")
+        parts.append(phase)
+        if elapsed is not None:
+            parts.append(f"{int(elapsed) // 60}:{int(elapsed) % 60:02d}")
+        return " · ".join(parts)
 
     @staticmethod
     def _extract_execution_trace(chatbot_history: list, max_chars: int = 6000) -> str:

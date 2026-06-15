@@ -95,13 +95,16 @@ class CoordinatorUI:
     def _dispatch_specialist(self, history: list, agent_id: str, message: str,
                               selected_datasets: list, reasoning: str | None = None):
         """Append a routing notice to `history`, dispatch to the specialist, then
-        fill in the result. Yields (history, "", panels) tuples for streaming,
-        where `panels` is a (data_md, code_md, logic_md) triple feeding the three
-        read-only transparency dropdowns.
+        fill in the result. Yields (history, "", panels, code_accordion) tuples
+        for streaming, where `panels` is a (data_md, code_md, logic_md) triple
+        feeding the three read-only transparency dropdowns and `code_accordion`
+        is a gr.Accordion open-state update.
 
         Expects `history[-1]` to be a placeholder assistant message. Because this
         is a fresh computation, the panels are reset (clearing any previous run's
-        trace) and then filled in live as the agent streams its steps.
+        trace) and then filled in live as the agent streams its steps. The Code
+        panel is auto-expanded for the duration so the substance is visible
+        without a manual click — the chat bubble itself stays a calm status line.
         """
         agent_name = self._router.agent_display_name(agent_id)
 
@@ -112,15 +115,16 @@ class CoordinatorUI:
         if status_note:
             routing_note += f"\n\n{status_note}"
         history[-1]["content"] = routing_note
-        # New run → clear the previous run's Data/Code/Logic panels.
+        # New run → clear the previous run's panels and auto-open the Code panel.
         panels = self._empty_panels()
-        yield history, "", panels
+        yield history, "", panels, gr.Accordion(open=True)
 
         # Stream the specialist's steps live. dispatch_to_specialist_stream
         # yields (display_text, trace, panels, done) frames as the agent works;
         # the panels bucketing is pure post-processing of the chatbot history
         # already on the wire (no extra calls/latency) and feeds the three
-        # transparency dropdowns.
+        # transparency dropdowns. `display_text` is a calm status line
+        # (step · phase · elapsed) for progress frames, the answer when done.
         all_ids = [v for _, v in self._dataset_choices]
         constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
 
@@ -135,11 +139,10 @@ class CoordinatorUI:
                     f"**Result from {agent_name}:**\n\n{text}"
                 )
             else:
-                # Live progress while the agent is still working.
-                history[-1]["content"] = (
-                    f"_**{agent_name}** is working…_\n\n{text}"
-                )
-            yield history, "", panels
+                # Calm live status line while the agent is still working.
+                history[-1]["content"] = f"⏳ _**{agent_name}** · {text}_"
+            # Keep the Code panel open throughout (and after) the run.
+            yield history, "", panels, gr.Accordion(open=True)
 
     def _respond(self, message: str, history: list, selected_datasets: list,
                   pending_specialist: dict | None,
@@ -152,7 +155,7 @@ class CoordinatorUI:
         refreshed live by _dispatch_specialist on a specialist computation."""
         panels = (data_md, code_md, logic_md)
         if not message.strip():
-            yield history, "", pending_specialist, *panels
+            yield history, "", pending_specialist, *panels, gr.skip()
             return
 
         # 0. If a dataset-specification prompt is pending, check whether this
@@ -170,8 +173,8 @@ class CoordinatorUI:
 
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": ""}]
-                for h, m, p in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets):
-                    yield h, m, None, *p
+                for h, m, p, acc in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets):
+                    yield h, m, None, *p, acc
                 return
             # Doesn't look like a reply to the pending prompt — drop it and
             # classify this message fresh as a new question.
@@ -195,19 +198,19 @@ class CoordinatorUI:
                 )
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": clarify_msg}]
-                yield history, "", {"message": message, "agent_id": agent_id}, *panels
+                yield history, "", {"message": message, "agent_id": agent_id}, *panels, gr.skip()
                 return
 
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            for h, m, p in self._dispatch_specialist(history, agent_id, message, selected_datasets, reasoning):
-                yield h, m, None, *p
+            for h, m, p, acc in self._dispatch_specialist(history, agent_id, message, selected_datasets, reasoning):
+                yield h, m, None, *p, acc
 
         else:
             # Direct Claude response — stream it
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            yield history, "", None, *panels
+            yield history, "", None, *panels, gr.skip()
 
             accumulated = ""
             # Build plain history for the API (exclude the current turn)
@@ -219,7 +222,7 @@ class CoordinatorUI:
             for chunk in self._router.direct_response(message, plain_history):
                 accumulated += chunk
                 history[-1]["content"] = accumulated
-                yield history, "", None, *panels
+                yield history, "", None, *panels, gr.skip()
 
 
     # ------------------------------------------------------------------
@@ -315,7 +318,10 @@ Conceptual questions are answered directly; computation is dispatched to special
                     "the specialist touched in the most recent computation._"
                 )
                 data_panel = gr.Markdown(self._NO_DATA_NOTE)
-            with gr.Accordion("💻 Code used", open=False):
+            # Named so we can auto-expand it live while the specialist runs
+            # (see _dispatch_specialist) — it carries the meatiest substance.
+            code_accordion = gr.Accordion("💻 Code used", open=False)
+            with code_accordion:
                 gr.Markdown(
                     "_The actual code the specialist executed, with its outputs._"
                 )
@@ -383,12 +389,12 @@ Conceptual questions are answered directly; computation is dispatched to special
             submit_btn.click(
                 fn=self._respond,
                 inputs=[msg_box, chatbot, dataset_selector, pending_specialist, *panel_components],
-                outputs=[chatbot, msg_box, pending_specialist, *panel_components],
+                outputs=[chatbot, msg_box, pending_specialist, *panel_components, code_accordion],
             )
             msg_box.submit(
                 fn=self._respond,
                 inputs=[msg_box, chatbot, dataset_selector, pending_specialist, *panel_components],
-                outputs=[chatbot, msg_box, pending_specialist, *panel_components],
+                outputs=[chatbot, msg_box, pending_specialist, *panel_components, code_accordion],
             )
             save_btn.click(
                 fn=self._save_session,
