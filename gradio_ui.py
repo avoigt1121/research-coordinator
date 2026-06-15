@@ -74,22 +74,34 @@ class CoordinatorUI:
     # Chat handler
     # ------------------------------------------------------------------
 
-    _NO_CALLS_NOTE = "_No specialist calls yet._"
+    # Placeholders for the three read-only transparency dropdowns.
+    _NO_DATA_NOTE = "_No dataset-loading steps yet._"
+    _NO_CODE_NOTE = "_No code has been executed yet._"
+    _NO_LOGIC_NOTE = "_No analysis steps yet._"
 
-    def _format_call_log(self, trace: str) -> str:
-        """Render a specialist's tool-execution trace digest for the
-        "What happened?" accordion, or a placeholder if empty."""
-        return trace if trace else self._NO_CALLS_NOTE
+    def _empty_panels(self) -> tuple[str, str, str]:
+        """Placeholder (data, code, logic) markdown for a cleared/idle state."""
+        return self._NO_DATA_NOTE, self._NO_CODE_NOTE, self._NO_LOGIC_NOTE
+
+    def _render_panels(self, panels: dict) -> tuple[str, str, str]:
+        """Map a router {"data","code","logic"} dict to (data, code, logic)
+        markdown, substituting the placeholder note for any empty bucket."""
+        return (
+            panels.get("data") or self._NO_DATA_NOTE,
+            panels.get("code") or self._NO_CODE_NOTE,
+            panels.get("logic") or self._NO_LOGIC_NOTE,
+        )
 
     def _dispatch_specialist(self, history: list, agent_id: str, message: str,
-                              selected_datasets: list, call_log: str, reasoning: str | None = None):
+                              selected_datasets: list, reasoning: str | None = None):
         """Append a routing notice to `history`, dispatch to the specialist, then
-        fill in the result. Yields (history, "", call_log) tuples for streaming.
+        fill in the result. Yields (history, "", panels) tuples for streaming,
+        where `panels` is a (data_md, code_md, logic_md) triple feeding the three
+        read-only transparency dropdowns.
 
-        Expects `history[-1]` to be a placeholder assistant message. `call_log`
-        is the rendered "What happened?" markdown text — passed through
-        unchanged until the dispatch completes, then replaced with the
-        specialist's tool-execution trace.
+        Expects `history[-1]` to be a placeholder assistant message. Because this
+        is a fresh computation, the panels are reset (clearing any previous run's
+        trace) and then filled in live as the agent streams its steps.
         """
         agent_name = self._router.agent_display_name(agent_id)
 
@@ -100,21 +112,23 @@ class CoordinatorUI:
         if status_note:
             routing_note += f"\n\n{status_note}"
         history[-1]["content"] = routing_note
-        yield history, "", call_log
+        # New run → clear the previous run's Data/Code/Logic panels.
+        panels = self._empty_panels()
+        yield history, "", panels
 
         # Stream the specialist's steps live. dispatch_to_specialist_stream
-        # yields (display_text, trace, done) frames as the agent works; the
-        # trace digest is pure post-processing of the chatbot history already on
-        # the wire (no extra calls/latency) and feeds the "What happened?" panel.
+        # yields (display_text, trace, panels, done) frames as the agent works;
+        # the panels bucketing is pure post-processing of the chatbot history
+        # already on the wire (no extra calls/latency) and feeds the three
+        # transparency dropdowns.
         all_ids = [v for _, v in self._dataset_choices]
         constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
 
-        current_call_log = call_log
-        for text, trace, done in self._router.dispatch_to_specialist_stream(
+        for text, _trace, raw_panels, done in self._router.dispatch_to_specialist_stream(
             agent_id, message, dataset_constraint=constraint
         ):
-            if trace:
-                current_call_log = self._format_call_log(trace)
+            if raw_panels and any(raw_panels.values()):
+                panels = self._render_panels(raw_panels)
             if done:
                 history[-1]["content"] = (
                     f"_Routing to **{agent_name}** for computation._\n\n"
@@ -125,13 +139,20 @@ class CoordinatorUI:
                 history[-1]["content"] = (
                     f"_**{agent_name}** is working…_\n\n{text}"
                 )
-            yield history, "", current_call_log
+            yield history, "", panels
 
     def _respond(self, message: str, history: list, selected_datasets: list,
-                  pending_specialist: dict | None, call_log: str):
-        """Handle one user turn. Yields (history, "", pending_specialist, call_log) tuples for streaming."""
+                  pending_specialist: dict | None,
+                  data_md: str, code_md: str, logic_md: str):
+        """Handle one user turn. Yields
+        (history, "", pending_specialist, data_md, code_md, logic_md) tuples.
+
+        The last three are the read-only Data / Code / Logic transparency
+        dropdowns; they pass through unchanged on direct/clarify turns and are
+        refreshed live by _dispatch_specialist on a specialist computation."""
+        panels = (data_md, code_md, logic_md)
         if not message.strip():
-            yield history, "", pending_specialist, call_log
+            yield history, "", pending_specialist, *panels
             return
 
         # 0. If a dataset-specification prompt is pending, check whether this
@@ -149,8 +170,8 @@ class CoordinatorUI:
 
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": ""}]
-                for h, m, cl in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets, call_log):
-                    yield h, m, None, cl
+                for h, m, p in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets):
+                    yield h, m, None, *p
                 return
             # Doesn't look like a reply to the pending prompt — drop it and
             # classify this message fresh as a new question.
@@ -174,19 +195,19 @@ class CoordinatorUI:
                 )
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": clarify_msg}]
-                yield history, "", {"message": message, "agent_id": agent_id}, call_log
+                yield history, "", {"message": message, "agent_id": agent_id}, *panels
                 return
 
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            for h, m, cl in self._dispatch_specialist(history, agent_id, message, selected_datasets, call_log, reasoning):
-                yield h, m, None, cl
+            for h, m, p in self._dispatch_specialist(history, agent_id, message, selected_datasets, reasoning):
+                yield h, m, None, *p
 
         else:
             # Direct Claude response — stream it
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            yield history, "", None, call_log
+            yield history, "", None, *panels
 
             accumulated = ""
             # Build plain history for the API (exclude the current turn)
@@ -198,15 +219,15 @@ class CoordinatorUI:
             for chunk in self._router.direct_response(message, plain_history):
                 accumulated += chunk
                 history[-1]["content"] = accumulated
-                yield history, "", None, call_log
+                yield history, "", None, *panels
 
 
     # ------------------------------------------------------------------
     # Session save / load
     # ------------------------------------------------------------------
 
-    def _save_session(self, history: list, call_log: str) -> str:
-        """Serialize chatbot history (and the latest call log) to a temp JSON file."""
+    def _save_session(self, history: list, data_md: str, code_md: str, logic_md: str) -> str:
+        """Serialize chatbot history (and the latest panels) to a temp JSON file."""
         if not history:
             return None
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -215,33 +236,45 @@ class CoordinatorUI:
             delete=False,
             mode="w",
         )
-        json.dump({"history": history, "call_log": call_log}, tmp, indent=2)
+        json.dump(
+            {"history": history,
+             "panels": {"data": data_md, "code": code_md, "logic": logic_md}},
+            tmp, indent=2,
+        )
         tmp.close()
         return tmp.name
 
-    def _load_session(self, filepath) -> tuple[list, str]:
-        """Deserialize a session JSON file back into (chatbot history, call_log).
+    def _load_session(self, filepath) -> tuple[list, str, str, str]:
+        """Deserialize a session JSON file back into
+        (history, data_md, code_md, logic_md).
 
-        Accepts both the current {"history": ..., "call_log": ...} format and
-        the older plain-list format (call_log defaults to the placeholder).
+        Accepts the current {"history", "panels"} format, the older
+        {"history", "call_log"} format (call_log maps to the Code panel), and
+        the oldest plain-list format (panels default to placeholders).
         """
+        d, c, lg = self._empty_panels()
         if filepath is None:
-            return [], self._NO_CALLS_NOTE
+            return [], d, c, lg
         try:
             with open(filepath, "r") as f:
                 data = json.load(f)
             if isinstance(data, list):
-                return data, self._NO_CALLS_NOTE
+                return data, d, c, lg
             if isinstance(data, dict):
                 history = data.get("history", [])
-                call_log = data.get("call_log", self._NO_CALLS_NOTE)
                 if not isinstance(history, list):
-                    return [], self._NO_CALLS_NOTE
-                return history, call_log
-            return [], self._NO_CALLS_NOTE
+                    return [], d, c, lg
+                panels = data.get("panels")
+                if isinstance(panels, dict):
+                    d, c, lg = self._render_panels(panels)
+                elif data.get("call_log"):
+                    # Back-compat: the old single trace maps to the Code panel.
+                    c = data["call_log"]
+                return history, d, c, lg
+            return [], d, c, lg
         except Exception as exc:
             logger.warning("Failed to load session file: %s", exc)
-            return [], self._NO_CALLS_NOTE
+            return [], d, c, lg
 
     # ------------------------------------------------------------------
     # UI construction
@@ -269,12 +302,30 @@ Conceptual questions are answered directly; computation is dispatched to special
             # asked the user to specify a dataset and is awaiting their reply.
             pending_specialist = gr.State(value=None)
 
-            with gr.Accordion("What happened? (tool calls)", open=False):
+            # Three read-only transparency dropdowns, collapsed by default.
+            # All three are filled from the same specialist response already on
+            # the wire (see ResearchRouter._extract_panels) — no extra latency.
+            gr.Markdown(
+                "_Behind each answer: expand to see **what data** was used, "
+                "**what code** ran, and the **reasoning** the specialist followed._"
+            )
+            with gr.Accordion("📊 Data used", open=False):
                 gr.Markdown(
-                    "_Shows the specialist agent's actual tool calls and execution "
-                    "results from the most recent computation request._"
+                    "_Datasets, loaders, source references, and sample counts "
+                    "the specialist touched in the most recent computation._"
                 )
-                call_log_display = gr.Markdown(self._NO_CALLS_NOTE)
+                data_panel = gr.Markdown(self._NO_DATA_NOTE)
+            with gr.Accordion("💻 Code used", open=False):
+                gr.Markdown(
+                    "_The actual code the specialist executed, with its outputs._"
+                )
+                code_panel = gr.Markdown(self._NO_CODE_NOTE)
+            with gr.Accordion("🧠 Logic / reasoning", open=False):
+                gr.Markdown(
+                    "_The step-by-step reasoning the specialist followed to reach "
+                    "the answer._"
+                )
+                logic_panel = gr.Markdown(self._NO_LOGIC_NOTE)
 
             with gr.Accordion("Dataset Selection (optional)", open=False):
                 gr.Markdown(
@@ -328,19 +379,20 @@ Conceptual questions are answered directly; computation is dispatched to special
             )
 
             # Wire up interactions
+            panel_components = [data_panel, code_panel, logic_panel]
             submit_btn.click(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, call_log_display],
-                outputs=[chatbot, msg_box, pending_specialist, call_log_display],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, *panel_components],
+                outputs=[chatbot, msg_box, pending_specialist, *panel_components],
             )
             msg_box.submit(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, call_log_display],
-                outputs=[chatbot, msg_box, pending_specialist, call_log_display],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, *panel_components],
+                outputs=[chatbot, msg_box, pending_specialist, *panel_components],
             )
             save_btn.click(
                 fn=self._save_session,
-                inputs=[chatbot, call_log_display],
+                inputs=[chatbot, *panel_components],
                 outputs=[download_file],
             ).then(
                 fn=lambda p: gr.File(value=p, visible=p is not None),
@@ -350,7 +402,7 @@ Conceptual questions are answered directly; computation is dispatched to special
             session_file.upload(
                 fn=self._load_session,
                 inputs=[session_file],
-                outputs=[chatbot, call_log_display],
+                outputs=[chatbot, *panel_components],
             )
 
         return demo

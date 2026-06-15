@@ -227,7 +227,7 @@ class ResearchRouter:
         # this; the Gradio UI calls dispatch_to_specialist_stream directly to
         # render the agent's steps live.
         final_text, final_trace = "", ""
-        for text, trace, _done in self.dispatch_to_specialist_stream(
+        for text, trace, _panels, _done in self.dispatch_to_specialist_stream(
             agent_id, message, dataset_constraint=dataset_constraint
         ):
             final_text, final_trace = text, trace
@@ -235,8 +235,8 @@ class ResearchRouter:
 
     def dispatch_to_specialist_stream(self, agent_id: str, message: str,
                                        dataset_constraint: list | None = None):
-        """Generator yielding (display_text, trace_digest, done) frames as the
-        specialist streams its workflow steps live.
+        """Generator yielding (display_text, trace_digest, panels, done) frames
+        as the specialist streams its workflow steps live.
 
         The specialist's /interact_with_agent is a Gradio *generator* endpoint
         (it yields a gr.ChatMessage per LangGraph step), so we submit() it and
@@ -247,14 +247,19 @@ class ResearchRouter:
         as live progress, then emit the polished solution as the final
         (done=True) frame.
 
+        `panels` is the {"data","code","logic"} bucketing of that same
+        on-the-wire history (see _extract_panels) for the UI's read-only
+        transparency dropdowns — like `trace_digest`, it is pure post-processing
+        and adds no token cost or latency.
+
         Frames:
-          - (progress_markdown, trace_digest, False) for each streamed step
-          - (solution_or_fallback, final_trace, True) exactly once, at the end
-        On any error a single (error_message, "", True) frame is yielded.
+          - (progress_markdown, trace_digest, panels, False) for each step
+          - (solution_or_fallback, final_trace, final_panels, True) once, at end
+        On any error a single (error_message, "", {}, True) frame is yielded.
         """
         agent = self._agents.get(agent_id)
         if agent is None:
-            yield (f"[Error] Unknown agent: {agent_id}", "", True)
+            yield (f"[Error] Unknown agent: {agent_id}", "", {}, True)
             return
 
         hf_space = self._resolve_hf_space(agent)
@@ -281,7 +286,7 @@ class ResearchRouter:
             yield (
                 f"[Stub] gradio_client is not installed. "
                 f"Would dispatch to {agent['name']} ({hf_space}) with: {message}",
-                "", True,
+                "", {}, True,
             )
             return
 
@@ -305,7 +310,8 @@ class ResearchRouter:
                 for frame in job:
                     result = frame
                     yield (self._render_progress(frame),
-                           self._extract_execution_trace(frame), False)
+                           self._extract_execution_trace(frame),
+                           self._extract_panels(frame), False)
                 if result is None:
                     result = job.result()
                 if self._echoed_query(result, message):
@@ -328,18 +334,20 @@ class ResearchRouter:
                 for frame in job:
                     cont = frame
                     yield (self._render_progress(frame),
-                           self._extract_execution_trace(frame), False)
+                           self._extract_execution_trace(frame),
+                           self._extract_panels(frame), False)
                 result = cont if cont is not None else job.result()
 
             solution, last_assistant, _ = self._extract_response(result)
             final = solution or last_assistant or str(result)
-            yield (final, self._extract_execution_trace(result), True)
+            yield (final, self._extract_execution_trace(result),
+                   self._extract_panels(result), True)
         except Exception as exc:
             yield (
                 f"[{agent['name']}] The specialist agent could not be reached "
                 f"(Space may be cold or loading). Error: {exc}\n\n"
                 "Please try again in a moment, or rephrase your question for a direct answer.",
-                "", True,
+                "", {}, True,
             )
 
     @staticmethod
@@ -460,6 +468,91 @@ class ResearchRouter:
             # Keep the tail (most recent steps, nearest the reported numbers).
             digest = "...[earlier steps truncated]...\n\n" + digest[-max_chars:]
         return digest
+
+    # Signals that a trace line concerns the DATA being loaded or its
+    # provenance. Phase-1 heuristic: surfaces dataset ids / loaders / shapes /
+    # source URLs that the agent printed. Richer manifest-level provenance
+    # ("preprocessed from <URL>", data_level, etc.) would come from the
+    # specialist emitting structured provenance — tracked as a follow-up.
+    _DATA_SIGNAL_RE = re.compile(
+        r"(dataset_list_available|decoupler_load|load_url_counts|load_and_filter"
+        r"|\.h5ad|AnnData|adata|n_obs|n_vars|\bshape\b|\bsamples?\b"
+        r"|https?://|GSE\d+|TCGA|PACA|CPTAC|ICGC|dataset_id)",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _extract_panels(chatbot_history: list, max_chars: int = 5000) -> dict:
+        """Bucket the agent's history into Data / Code / Logic views for the UI.
+
+        Returns {"data": str, "code": str, "logic": str} — markdown for the
+        three read-only transparency dropdowns. Like _extract_execution_trace,
+        this is pure post-processing of the chatbot history already returned by
+        the Space (no extra calls, no token cost, no added latency). Any bucket
+        with nothing detected is "" so the UI can show a placeholder.
+
+        Bucketing:
+          - code:  steps that executed code / observed its output
+          - logic: the agent's prose reasoning steps (no code/output)
+          - data:  individual lines (from any step) that name a dataset,
+                   loader, source URL, or shape — the "what data" evidence
+        The Final Solution, the HF log-link notice, and step-limit notices are
+        all excluded (the solution itself is shown in the chat above).
+        """
+        empty = {"data": "", "code": "", "logic": ""}
+        if not isinstance(chatbot_history, list) or not chatbot_history:
+            return empty
+
+        def _strip_html(text: str) -> str:
+            text = re.sub(r"<[^>]+>", "", text)
+            return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        code_blocks: list[str] = []
+        logic_blocks: list[str] = []
+        data_lines: list[str] = []
+        for msg in chatbot_history:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            raw = msg.get("content", "") or ""
+            if not raw.strip():
+                continue
+            if "Final Solution" in raw or "solution-content" in raw:
+                continue
+            # Skip only the run-log notice. Match its signature phrase rather
+            # than a bare "huggingface.co/datasets" — the datasets themselves
+            # are hosted there (anne-voigt/pdac-research-data), so a URL match
+            # would wrongly drop real data-loading output from the Data panel.
+            if "Full run log saved" in raw:
+                continue
+            if "Step limit reached" in raw:
+                continue
+            cleaned = _strip_html(raw)
+            if not cleaned:
+                continue
+            is_code = ("Executing Code" in cleaned or "Code Output" in cleaned
+                       or "Execution Result" in cleaned or "```" in raw)
+            if is_code:
+                code_blocks.append(cleaned)
+            else:
+                logic_blocks.append(cleaned)
+            # Data evidence can appear in either a code block or its output, so
+            # scan every block's lines regardless of bucket.
+            for line in cleaned.splitlines():
+                stripped = line.strip()
+                if stripped and ResearchRouter._DATA_SIGNAL_RE.search(stripped) \
+                        and stripped not in data_lines:
+                    data_lines.append(stripped)
+
+        def _cap(text: str) -> str:
+            if len(text) > max_chars:
+                return "…[earlier steps truncated]…\n\n" + text[-max_chars:]
+            return text
+
+        return {
+            "data": _cap("\n".join(data_lines)),
+            "code": _cap("\n\n---\n\n".join(code_blocks)),
+            "logic": _cap("\n\n---\n\n".join(logic_blocks)),
+        }
 
     @staticmethod
     def flag_unbacked_numbers(response: str, execution_trace: str) -> bool:
