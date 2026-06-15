@@ -458,6 +458,53 @@ call (trace visibility), and/or add an explicit system-prompt instruction
 that numeric results in the final solution MUST come from an actual
 `decoupler`/MCP tool call in this turn's trace — not yet implemented.
 
+### Group 6 — fabrication deep-dive — DONE 2026-06-14
+
+Deep-dived the "fabrication" FAILs (ANS-005/009, INF-005/016, LIM-008). Ran a
+live diagnostic dispatch capturing the FULL chatbot_history (111 msgs, ~50
+steps, 12 real tool-observation steps; `/tmp/diag_trace_full.json`) and checked
+the solution's numbers against the actual tool outputs.
+
+**Finding: the agent is NOT fabricating headline results.** Every headline
+number traced to a real `dataset_compare_activity_by_group` observation —
+`n_significant_05: 221`, `n_activities: 592`, the pairwise table (122/9/3/1/1),
+and primary-contrast per-TF stats (obs msg 94:
+`SNAI1 effect_size=2.151083, mean_test=2.191278, mean_control=0.360171` →
+solution "SNAI1 +2.15, 2.19 vs 0.36"). Two real causes:
+1. **Eval measurement artifact (dominant).** The coordinator's
+   `_extract_response` returns only the Final Solution and discards the
+   `<observation>` steps, so the judge saw a polished narrative with no visible
+   computation and (told to grade strictly) inferred fabrication. False
+   positive. Users see the same stripped view, so results weren't verifiable
+   either.
+2. **Memory-window confabulation (minor).** `memory_window=15` over a ~50-step
+   run pushes early observation tables out of context; a minority of SECONDARY
+   numbers were reconstructed from memory with small drift (PAX5 mean 2.04 vs
+   real ~2.0x; FOXA1 1.64 vs 1.63; SNAI2 -2.23 vs -2.2).
+
+**Fixes (eval + agent; chosen by user, honoring the memory_window constraint —
+the trace is captured OUTSIDE the LLM context, no token/latency cost):**
+- **Eval** (`research-coordinator` `3c04a2f`): added
+  `ResearchRouter._extract_execution_trace()` (distills real "Code Output"
+  observations + tool calls from the history the Space already returns) exposed
+  via `dispatch_to_specialist(..., return_trace=True)`. `run_eval.py` captures
+  it and feeds it to the judge; `JUDGE_RUBRIC` now grades fabrication against
+  the TRACE, not narrative style. Verified on the captured trace: same solution
+  → PASS with trace present, FAIL with trace empty (negative control).
+- **Agent** (`DecoupleRpy_Agent` `d12ffc3`): added a mandatory "## Reporting
+  Results: Provenance and Anti-Fabrication" section — every number in
+  `<solution>` must come from a this-turn observation; re-read the saved
+  results CSV in a final `<execute>` right before reporting (instead of
+  reconstructing from scrolled-out memory) and quote it verbatim; cite tools
+  run + output artifact paths; state plainly when a computation failed. Also
+  marked Example 6's inline numbers as illustrative-only so they aren't
+  pattern-copied. Renders cleanly; deploy confirmation pending below.
+
+Full detail in structured memory `group6-fabrication-is-mostly-eval-artifact`.
+Not touched: `memory_window` (the quadratic-cost guard) and temperature 0.7
+(left as-is since headline numbers were real). DEPLOY/VERIFY status: agent
+`d12ffc3` pushed; build + re-eval confirmation TBD.
+
 ### Eval Environment Note
 The local dev environment's default Python (3.9, via
 `/Library/Developer/CommandLineTools/usr/bin/python3`) can only install
