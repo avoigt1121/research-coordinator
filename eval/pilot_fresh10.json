@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "name": "Fresh stratified 10-question blind-spot set (decoupleRpy specialist)",
+    "scope": "DecoupleRpy specialist only; 2 per category, all IDs disjoint from the original 18-question pilot. Routing graded automatically; quality graded by LLM judge against expected_behavior.",
+    "source": "/Users/annivoigt/Documents/business/plans&documentation/decoupleRpy_agent_test_questions.json",
+    "total_questions": 10
+  },
+  "questions": [
+    {
+      "id": "ANS-002",
+      "category": "answerable_specified",
+      "question": "Estimate PROGENy pathway activities on gse71729_moffitt and compare classical vs basal subtypes.",
+      "target_datasets": [
+        "gse71729_moffitt"
+      ],
+      "decoupler": "PROGENy (mlm/ulm)",
+      "expected_behavior": "EXECUTE",
+      "notes": "Subtype labels exist in Moffitt."
+    },
+    {
+      "id": "ANS-013",
+      "category": "answerable_specified",
+      "question": "Use decoupleR to score Hallmark EMT activity per sample in tcga_paad via AUCell.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "aucell + HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+      "expected_behavior": "EXECUTE",
+      "notes": "Single gene-set scoring."
+    },
+    {
+      "id": "INF-015",
+      "category": "answerable_infer_dataset",
+      "question": "Find the most variable TFs across PDAC tumors in a large RNA-seq dataset.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "TF activity",
+      "expected_behavior": "INFER_DATASET",
+      "notes": "Largest RNA-seq cohort."
+    },
+    {
+      "id": "INF-019",
+      "category": "answerable_infer_dataset",
+      "question": "Run subtype-aware TF inference on RNA-seq specifically, not microarray.",
+      "target_datasets": [
+        "paca_au_rnaseq"
+      ],
+      "decoupler": "TF activity",
+      "expected_behavior": "INFER_DATASET",
+      "notes": "RNA-seq + subtype labels => PACA-AU RNA-seq."
+    },
+    {
+      "id": "LIM-002",
+      "category": "data_limitation",
+      "question": "Fit a Cox model of TF activity against survival using gse16515_mayo.",
+      "target_datasets": [
+        "gse16515_mayo"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "FLAG_LIMITATION",
+      "notes": "gse16515 is a T/N pair set with no survival data; redirect to a survival cohort (and note Cox itself is downstream of decoupleR)."
+    },
+    {
+      "id": "LIM-006",
+      "category": "data_limitation",
+      "question": "Estimate protein-level TF activity directly from cptac_pda.",
+      "target_datasets": [
+        "cptac_pda"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "FLAG_LIMITATION",
+      "notes": "Only the RNA-seq TPM layer is registered; the proteome layer is not available here."
+    },
+    {
+      "id": "NOD-001",
+      "category": "no_data_refuse",
+      "question": "Estimate TF activities in lung adenocarcinoma (LUAD).",
+      "target_datasets": [],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_NO_DATA",
+      "notes": "Data layer is PDAC-only; no LUAD."
+    },
+    {
+      "id": "NOD-012",
+      "category": "no_data_refuse",
+      "question": "Compare PDAC vs chronic pancreatitis tissue.",
+      "target_datasets": [],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_NO_DATA",
+      "notes": "No chronic-pancreatitis cohort."
+    },
+    {
+      "id": "OOS-001",
+      "category": "out_of_scope_refuse",
+      "question": "Call somatic mutations from the TCGA-PAAD BAM files.",
+      "target_datasets": [
+        "tcga_paad"
+      ],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_OUT_OF_SCOPE",
+      "notes": "Variant calling is not a decoupleR task."
+    },
+    {
+      "id": "OOS-012",
+      "category": "out_of_scope_refuse",
+      "question": "Cluster single cells and annotate their cell types.",
+      "target_datasets": [],
+      "decoupler": "n/a",
+      "expected_behavior": "REFUSE_OUT_OF_SCOPE",
+      "notes": "Out of scope (and no single-cell data); redirect to Scanpy/Seurat."
+    }
+  ]
+}
