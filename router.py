@@ -397,30 +397,47 @@ class ResearchRouter:
         return solution, last_assistant, step_limit_hit
 
     @staticmethod
-    def _render_progress(chatbot_history: list, max_chars: int = 1500) -> str:
-        """Render a live 'agent is working' view from a partial chatbot history.
+    def _render_progress(chatbot_history: list, max_steps: int = 12,
+                          line_chars: int = 110) -> str:
+        """Render a stable, growing checklist of the agent's steps so far.
 
-        Shows the most recent meaningful assistant step (HTML stripped) so the
-        coordinator chat reflects what the specialist is doing right now. The
-        full step-by-step evidence accumulates separately in the "What
-        happened?" panel via _extract_execution_trace.
+        Each streamed frame carries the *full* accumulated chatbot history, so
+        we list one short headline per assistant step rather than just the
+        latest message. Because every frame is a superset of the previous one,
+        the view only grows — it never flickers back to a placeholder or flashes
+        a step away before it can be read. The current (last) step is marked
+        with ⏳; the full detail for every step lives in the Data/Code/Logic
+        panels via _extract_panels.
         """
-        latest = ""
-        if isinstance(chatbot_history, list):
-            for msg in chatbot_history:
-                if not isinstance(msg, dict) or msg.get("role") != "assistant":
-                    continue
-                content = (msg.get("content") or "").strip()
-                if not content:
-                    continue
-                if "Full run log saved" in content or "huggingface.co/datasets" in content:
-                    continue
-                latest = content
-        text = re.sub(r"<[^>]+>", "", latest)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-        if len(text) > max_chars:
-            text = "…" + text[-max_chars:]
-        return text or "_…thinking…_"
+        if not isinstance(chatbot_history, list):
+            return "_…thinking…_"
+        headlines: list[str] = []
+        for msg in chatbot_history:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            raw = msg.get("content", "") or ""
+            if "Final Solution" in raw or "solution-content" in raw:
+                continue
+            if "Full run log saved" in raw or "Step limit reached" in raw:
+                continue
+            # First non-empty line, HTML stripped, as a one-line headline.
+            text = re.sub(r"<[^>]+>", " ", raw)
+            line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+            if not line:
+                continue
+            line = re.sub(r"\s+", " ", line)
+            if len(line) > line_chars:
+                line = line[:line_chars].rstrip() + "…"
+            # Collapse consecutive duplicates (a step streams in incrementally).
+            if headlines and headlines[-1] == line:
+                continue
+            headlines.append(line)
+        if not headlines:
+            return "_…thinking…_"
+        shown = headlines[-max_steps:]
+        prefix = "…\n" if len(headlines) > max_steps else ""
+        lines = [f"- {h}" for h in shown[:-1]] + [f"- ⏳ {shown[-1]}"]
+        return prefix + "\n".join(lines)
 
     @staticmethod
     def _extract_execution_trace(chatbot_history: list, max_chars: int = 6000) -> str:
