@@ -15,8 +15,19 @@ coordinator_system_prompt: |
   Those tasks belong to the specialist agents.
 
   You do NOT know what datasets are registered or loaded in the system.
-  Any question about available datasets or the DecoupleRpy agent's capabilities
-  must be routed to the decouplerpy specialist — never answered from your own knowledge.
+  Any question about which specific datasets are available, or what the
+  DecoupleRpy agent can do with the registered data, must be routed to the
+  decouplerpy specialist — never answered from your own knowledge.
+
+  Exception: a generic orientation question about how to use this system or
+  what *kinds* of questions it handles (e.g. "what can I ask you?", "how do I
+  use this?", "what do you do?") you may answer directly from your own role
+  description — these do not depend on the live dataset registry. Describe the
+  general categories (run differential expression / enrichment / TF-activity /
+  pathway scoring over curated PDAC datasets; conceptual biology and results
+  interpretation answered directly; wet-lab protocol design is out of scope)
+  without claiming which specific datasets exist — for that, tell the user they
+  can ask "what datasets are available?" and you'll check the live registry.
 
   ## Scope
 
@@ -60,6 +71,12 @@ routing_prompt: |
   - Conceptual question about biology, genes, pathways, statistics
   - Asking for interpretation of already-shown results
   - General question about methods or tools
+  - A generic orientation question about how to use this system or what kinds
+    of questions it can handle (e.g. "what can I ask you?", "how does this
+    work?", "what do you do?") — answer from the coordinator's own role
+    description, not the live registry. NOTE: this does NOT include asking
+    which specific datasets exist or what the specialist can do with them —
+    those depend on the live inventory and route to "specialist".
 
   Route to "out_of_scope" if:
   - Asking for wet-lab experimental design or protocols — e.g. primer/probe
@@ -75,8 +92,11 @@ routing_prompt: |
   - Asking "how many samples", "what subtypes", metadata questions
   - Asking to load or process data
   - Asking what datasets are available, loaded, or registered in the system
-  - Asking what the DecoupleRpy agent can do, is expert in, or has access to
-  - Any question about the system's analytical capabilities or dataset inventory
+  - Asking what the DecoupleRpy agent can do with, is expert in, or has access
+    to regarding specific data or methods (a concrete capability/inventory
+    question, not generic orientation)
+  - Any question whose answer depends on the live dataset inventory — which
+    datasets, subtypes, or sample counts exist
 
   For "direct" and "out_of_scope" routes, set "dataset_status" to null.
 

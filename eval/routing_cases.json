@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "name": "Coordinator-level routing regression cases",
+    "scope": "Tests router.classify() ONLY — the direct vs out_of_scope vs specialist decision. No specialist dispatch and no LLM judge: each case asserts the expected route (and agent_id for specialist). This is the 'separate bank for coordinator-level routing' the eval README lists as a next step, kept out of pilot_questions.json (which is specialist-only and auto-fails anything that doesn't reach the specialist).",
+    "graded": "deterministic — route/agent_id equality"
+  },
+  "cases": [
+    {
+      "id": "ORIENT-001",
+      "question": "What questions can I ask you?",
+      "expected_route": "direct",
+      "expected_agent_id": null,
+      "notes": "Regression: generic orientation about how to use the system. Must NOT round-trip to the specialist — the coordinator answers from its own role description. This is the case that motivated the split (2026-06-15)."
+    },
+    {
+      "id": "ORIENT-002",
+      "question": "How does this work?",
+      "expected_route": "direct",
+      "expected_agent_id": null,
+      "notes": "Generic how-to-use orientation; answer directly."
+    },
+    {
+      "id": "ORIENT-003",
+      "question": "What do you do?",
+      "expected_route": "direct",
+      "expected_agent_id": null,
+      "notes": "Generic capability framing, not a live-inventory query."
+    },
+    {
+      "id": "INV-001",
+      "question": "What datasets are available?",
+      "expected_route": "specialist",
+      "expected_agent_id": "decouplerpy",
+      "notes": "Guard the other direction: concrete inventory question depends on the live registry — must still route to the specialist."
+    },
+    {
+      "id": "INV-002",
+      "question": "Do you have the Bailey subtype cohort?",
+      "expected_route": "specialist",
+      "expected_agent_id": "decouplerpy",
+      "notes": "Specific dataset-existence question; live inventory, route to specialist."
+    },
+    {
+      "id": "INV-003",
+      "question": "What can the DecoupleRpy agent do with tcga_paad?",
+      "expected_route": "specialist",
+      "expected_agent_id": "decouplerpy",
+      "notes": "Concrete capability tied to a specific dataset — not generic orientation."
+    },
+    {
+      "id": "DIRECT-001",
+      "question": "What does the TP53 gene do?",
+      "expected_route": "direct",
+      "expected_agent_id": null,
+      "notes": "Conceptual biology — answered directly."
+    },
+    {
+      "id": "OOS-001",
+      "question": "Design qPCR primers for KRAS.",
+      "expected_route": "out_of_scope",
+      "expected_agent_id": null,
+      "notes": "Wet-lab protocol design — out of scope."
+    }
+  ]
+}

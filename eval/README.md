@@ -26,6 +26,25 @@ framing. These need their own question banks once they're relevant —
 do not extend this bank to cover them, to avoid diluting what it's
 testing for.
 
+## Routing regression bank (`routing_cases.json`)
+
+A separate, lighter bank that tests **only** the `router.classify()`
+decision — `direct` vs `out_of_scope` vs `specialist` — with no specialist
+dispatch and no LLM judge. Each case asserts the expected `route` (and
+`agent_id` for specialist routes) by string equality, so it's cheap (one
+classify call per case) and gates a push via its exit code.
+
+```bash
+python3 eval/run_routing.py            # runs eval/routing_cases.json
+```
+
+This is where direct-vs-specialist edge cases live — notably the
+distinction between generic orientation questions ("what can I ask you?",
+which must answer `direct`) and concrete live-inventory questions ("what
+datasets are available?", which must route to the specialist). Added
+2026-06-15 after "what questions can I ask you" was over-routing to the
+specialist.
+
 ## Running
 
 ```bash
@@ -58,7 +77,8 @@ console.anthropic.com before running.
 ## Next steps (after pilot validates the harness)
 
 - Run the full 109-question bank (`decoupleRpy_agent_test_questions.json`)
-- Build a separate bank for coordinator-level routing (direct vs.
-  specialist, multi-specialist dispatch) once relevant
+- Coordinator-level routing now has its own bank (`routing_cases.json`,
+  see above); extend it when a second specialist agent makes
+  multi-specialist dispatch relevant
 - Consider a baseline-diff mode: save a graded run as a baseline, and have
   future runs flag verdict *changes* rather than re-grading from scratch
