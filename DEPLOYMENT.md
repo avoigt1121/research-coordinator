@@ -85,20 +85,26 @@ dev Space yet (DecoupleRpy_Agent does: `Paper2Agent_decoupleRpy_dev`). To get on
 mirroring the Agent's setup:
 
 1. Create a Space `anne-voigt/research_coordinator_dev` (Gradio SDK) on HF.
-2. Set its `ANTHROPIC_API_KEY` secret (same as prod).
-3. Add a remote and push `dev` to it:
+2. Set its secrets/variables:
+   - `ANTHROPIC_API_KEY` (same as prod) — its Space secret.
+   - `HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev` — points the dev
+     coordinator at the **dev** specialist Space, so you test the full chain
+     (coordinator + specialist) without touching either prod Space.
+3. The `hf-dev` remote is already configured (points at the dev Space URL). Push
+   `dev` to it to deploy:
    ```bash
-   git remote add hf-dev https://huggingface.co/spaces/anne-voigt/research_coordinator_dev
    git push hf-dev dev:main      # Spaces build from their own `main` branch
    ```
 4. Test against the dev Space URL. Promote to prod only via the step-5 flow above.
 
 Until that Space exists, treat **local runs** as the dev environment and keep all
-in-progress work on `dev`.
+in-progress work on `dev`. (To test the dev chain locally, export the same var:
+`export HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev` before running.)
 
-> Note: pointing the dev coordinator at a dev specialist — set the specialist
-> Space in `agents.yaml` to `Paper2Agent_decoupleRpy_dev` on the `dev` branch — lets
-> you test the full chain (coordinator + specialist) without touching either prod Space.
+> **Why an env var, not an `agents.yaml` edit?** The prod specialist target stays the
+> default in `agents.yaml`; the dev override lives only in the dev Space's env
+> (`HF_SPACE_<AGENT_ID>`). That way promoting `dev` → `main` can never silently
+> repoint prod at a dev Space. Resolution: `router.py:_resolve_hf_space()`.
 
 ---
 

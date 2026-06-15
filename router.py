@@ -174,7 +174,7 @@ class ResearchRouter:
         agent = self._agents.get(agent_id)
         if agent is None:
             return None
-        hf_space = agent["hf_space"]
+        hf_space = self._resolve_hf_space(agent)
         try:
             resp = httpx.get(
                 f"https://huggingface.co/api/spaces/{hf_space}/runtime",
@@ -190,6 +190,20 @@ class ResearchRouter:
                 f" Please be patient._"
             )
         return None
+
+    def _resolve_hf_space(self, agent: dict) -> str:
+        """Resolve a specialist's target HF Space, allowing a per-agent env override.
+
+        Default is the prod value from agents.yaml (so promoting `dev` -> `main`
+        never changes the prod target). A dev deployment can point at a dev Space
+        by setting env var `HF_SPACE_<ID>` (id upper-cased), e.g. on the
+        research_coordinator_dev Space:
+            HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev
+        This keeps dev/prod routing in env config, not in branch-divergent code.
+        """
+        import os
+        override = os.environ.get(f"HF_SPACE_{agent['id'].upper()}")
+        return override or agent["hf_space"]
 
     def dispatch_to_specialist(self, agent_id: str, message: str, dataset_constraint: list | None = None,
                                 return_trace: bool = False):
@@ -216,7 +230,7 @@ class ResearchRouter:
         if agent is None:
             return _ret(f"[Error] Unknown agent: {agent_id}")
 
-        hf_space = agent["hf_space"]
+        hf_space = self._resolve_hf_space(agent)
 
         # Prepend dataset constraint note if user restricted selection
         if dataset_constraint:

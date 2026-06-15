@@ -1,3 +1,10 @@
+# hf_space below is the PRODUCTION target and the safe default.
+# To point a dev deployment at a dev specialist Space, set an env var
+# HF_SPACE_<ID> (id upper-cased) instead of editing this file — e.g. on the
+# research_coordinator_dev Space set:
+#   HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev
+# Keeping the override in env (not here) means promoting dev -> main never
+# repoints prod. Resolution lives in router.py:_resolve_hf_space().
 agents:
   - id: decouplerpy
     name: "DecoupleRpy Agent"
