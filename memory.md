@@ -502,8 +502,23 @@ the trace is captured OUTSIDE the LLM context, no token/latency cost):**
 
 Full detail in structured memory `group6-fabrication-is-mostly-eval-artifact`.
 Not touched: `memory_window` (the quadratic-cost guard) and temperature 0.7
-(left as-is since headline numbers were real). DEPLOY/VERIFY status: agent
-`d12ffc3` pushed; build + re-eval confirmation TBD.
+(left as-is since headline numbers were real).
+
+**DEPLOY + VERIFY (confirmed 2026-06-14):** agent `d12ffc3` deployed, Space
+`RUNNING`, 47 MCP tools intact. Verification dispatch ("PROGENy ULM on
+tcga_paad, top pathways by effect size") captured full trace
+(`/tmp/diag_trace_full.json`, 60 msgs). New behavior confirmed working:
+(1) the agent ran a final `pd.read_csv(.../tcga_paad_progeny_ulm_activities.csv)`
+RE-READ step (msgs 41/49/52) immediately before the solution (msg 56);
+(2) the `<solution>` cites provenance — "**Artifacts:**
+`/app/tmp/outputs/tcga_paad_progeny_ulm_activities.csv`, `..._pvalues.csv`",
+the tool `dataset_score_bulk_samples`, and method PROGENy ULM;
+(3) every number in the 14-pathway results table traces EXACTLY to the re-read
+observation (msg 52), with correct rounding (e.g. trace JAK-STAT 19.9758 →
+solution 19.98; VEGF 14.3580 → 14.36; TGFb/p53/EGFR/Estrogen/PI3K all exact).
+No confabulation. The eval judge would now also see this trace and grade it
+PASS on evidence. Full eval re-run with both fixes not yet done (optional
+follow-up).
 
 ### Eval Environment Note
 The local dev environment's default Python (3.9, via
