@@ -86,10 +86,16 @@ mirroring the Agent's setup:
 
 1. Create a Space `anne-voigt/research_coordinator_dev` (Gradio SDK) on HF.
 2. Set its secrets/variables:
-   - `ANTHROPIC_API_KEY` (same as prod) — its Space secret.
+   - `ANTHROPIC_API_KEY` (same as prod) — its Space secret. (The router also accepts
+     `Anthropic_API_KEY`; use one of these exact names or the Space won't start.)
    - `HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev` — points the dev
      coordinator at the **dev** specialist Space, so you test the full chain
      (coordinator + specialist) without touching either prod Space.
+   - `HF_TOKEN` (secret) — **only needed if the dev specialist Space is private.**
+     A token with read access lets the coordinator reach a private specialist via
+     gradio_client. Prod's specialist is public, so prod leaves this unset and
+     behaves exactly as before. Resolution: `router.py` reads `HF_TOKEN` and passes
+     it to `GradioClient(..., hf_token=...)`.
 3. The `hf-dev` remote is already configured (points at the dev Space URL). Push
    `dev` to it to deploy:
    ```bash

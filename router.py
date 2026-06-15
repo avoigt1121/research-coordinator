@@ -232,6 +232,11 @@ class ResearchRouter:
 
         hf_space = self._resolve_hf_space(agent)
 
+        # Optional HF token so the coordinator can reach a PRIVATE specialist
+        # Space (e.g. a dev Space). Prod's specialist is public, so this is
+        # unset there and GradioClient behaves exactly as before (hf_token=None).
+        hf_token = os.environ.get("HF_TOKEN") or None
+
         # Prepend dataset constraint note if user restricted selection
         if dataset_constraint:
             ids = ", ".join(dataset_constraint)
@@ -256,7 +261,7 @@ class ResearchRouter:
             # "no instruction received" message. Detect that and retry with a fresh
             # session (new gradio_client = new session_hash) before giving up.
             for attempt in range(MAX_DISPATCH_RETRIES):
-                gc = GradioClient(hf_space, httpx_kwargs={"timeout": SPECIALIST_TIMEOUT_SECONDS})
+                gc = GradioClient(hf_space, hf_token=hf_token, httpx_kwargs={"timeout": SPECIALIST_TIMEOUT_SECONDS})
                 # Step 1: call /lambda to set that state for this session.
                 gc.predict(x=message, api_name="/lambda")
                 # Step 2: call /interact_with_agent with empty history — query comes from state.
