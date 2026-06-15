@@ -83,6 +83,15 @@ It always routes dataset/capability questions to the specialist.
 - **HF secret**: `ANTHROPIC_API_KEY` must be set in Space settings (separate
   from the `HF_TOKEN` GitHub Actions secret above)
 
+### Branch & deploy safety (read `DEPLOYMENT.md`)
+
+- **`main` IS production.** The sync Action triggers on `push` to `main` only,
+  so pushing **`main`** deploys to the live Space; pushing **`dev`** (or any other
+  branch) does **not**. Do all work on `dev`; promote to `main` only to release.
+- **Default to dev. Never push `main` unless the user explicitly asks to deploy
+  to prod.** Full workflow, dev-Space setup, and the "am I about to deploy?"
+  checklist live in `DEPLOYMENT.md`.
+
 ---
 
 ## Adding a New Specialist Agent
