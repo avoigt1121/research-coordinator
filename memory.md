@@ -520,6 +520,40 @@ No confabulation. The eval judge would now also see this trace and grade it
 PASS on evidence. Full eval re-run with both fixes not yet done (optional
 follow-up).
 
+### Fresh 10-question blind-spot eval — 2026-06-14
+
+Ran a NEW stratified 10 (`eval/pilot_fresh10.json`, IDs disjoint from the
+18-pilot) to avoid validating fixes only against questions seen during dev.
+`eval/results/20260614_180906_*`. **PASS 7 / FAIL 3.** Session fixes held on
+unseen questions: INF-015 → `paca_ca_rnaseq` (largest RNA-seq) and INF-019 →
+`paca_au_rnaseq` (subtypes requested) BOTH correct → cohort-size heuristic
+works; ANS-002 PASS with provenance CSV path; the fabrication backstop did not
+false-fire on any refusal. The 3 FAILs were NEW blind spots, all the same
+family ("requested X not exactly available"), none the Group 6 issue:
+- **NOD-001** (REFUSE_NO_DATA): asked for LUAD; agent fetched REAL external
+  TCGA-LUAD (576 samples = real LUAD size) via arbitrary Python and analyzed
+  it. Not fabrication — a scope breach. **Product decision (Anne): this is
+  DESIRED, just needs a 'not curated/validated' disclaimer.** See structured
+  memory [[blindspot-agent-fetches-external-non-registered-data]].
+- **LIM-006** (FLAG_LIMITATION): asked for protein-level from cptac_pda (only
+  RNA-seq TPM registered); agent silently ran RNA-seq and labeled it
+  "Protein-level" → under-sensitive.
+- **ANS-013** (EXECUTE): asked for AUCell (not exposed); agent refused + asked
+  permission instead of substituting ulm/mlm and running → over-sensitive.
+
+**Fix — Availability & Substitution Policy** (`DecoupleRpy_Agent` `f39da02`,
+deployed): one prompt section keyed on whether a substitute changes the MEANING
+of the answer. (1) method unavailable but supported method answers same
+question → substitute + RUN + note (fixes ANS-013); (2) only different-meaning
+data available (protein→RNA) → flag as headline, never relabel (fixes LIM-006);
+(3) cohort not in ## Available Datasets → may proceed but must prominently flag
+"outside curated PDAC registry, not validated" (implements NOD-001 decision).
+**Eval rubric updated** (`research-coordinator` `52b269c`): REFUSE_NO_DATA now
+PASSes either a clean refusal OR proceed-with-prominent-disclaimer; FAILs only
+if non-registered results are presented as curated or fabricated; different
+assay/modality (ATAC/methylation/spatial) still expected to refuse. Not yet
+re-run against the fresh 10 to confirm the 3 flip.
+
 ### Group 6 follow-ups — 2026-06-14
 
 **INF-005 was NOT an eval-grading bug (correction).** Initially suspected the
