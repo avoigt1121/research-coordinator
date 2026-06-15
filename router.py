@@ -377,6 +377,29 @@ class ResearchRouter:
             digest = "...[earlier steps truncated]...\n\n" + digest[-max_chars:]
         return digest
 
+    @staticmethod
+    def flag_unbacked_numbers(response: str, execution_trace: str) -> bool:
+        """Narrow, deterministic fabrication backstop (belt-and-suspenders).
+
+        Returns True only in the egregious case: the response presents a
+        substantial set of concrete numeric results but the execution trace
+        shows NO real tool/code output to back them. Intentionally conservative
+        so it does not trip on legitimate non-execution answers (out-of-scope
+        refusals, request-for-required-input, conceptual answers, limitation
+        flags) — those don't contain numeric results tables.
+        """
+        if not response:
+            return False
+        # Real tool output present → not unbacked.
+        if execution_trace and ("Code Output" in execution_trace
+                                 or "Execution Result" in execution_trace):
+            return False
+        # Count concrete decimal results. A high bar (>= 8) keeps refusals and
+        # clarifications (which may mention an occasional "n=89" or a p-value in
+        # prose) from being flagged; only a results-table-sized cluster trips it.
+        floats = re.findall(r"-?\d+\.\d+", response)
+        return len(floats) >= 8
+
     def agent_display_name(self, agent_id: str) -> str:
         agent = self._agents.get(agent_id, {})
         return agent.get("name", agent_id)
