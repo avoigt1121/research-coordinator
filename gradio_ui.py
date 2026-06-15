@@ -74,12 +74,22 @@ class CoordinatorUI:
     # Chat handler
     # ------------------------------------------------------------------
 
-    def _dispatch_specialist(self, history: list, agent_id: str, message: str,
-                              selected_datasets: list, reasoning: str | None = None):
-        """Append a routing notice to `history`, dispatch to the specialist, then
-        fill in the result. Yields (history, "") pairs for streaming.
+    _NO_CALLS_NOTE = "_No specialist calls yet._"
 
-        Expects `history[-1]` to be a placeholder assistant message.
+    def _format_call_log(self, trace: str) -> str:
+        """Render a specialist's tool-execution trace digest for the
+        "What happened?" accordion, or a placeholder if empty."""
+        return trace if trace else self._NO_CALLS_NOTE
+
+    def _dispatch_specialist(self, history: list, agent_id: str, message: str,
+                              selected_datasets: list, call_log: str, reasoning: str | None = None):
+        """Append a routing notice to `history`, dispatch to the specialist, then
+        fill in the result. Yields (history, "", call_log) tuples for streaming.
+
+        Expects `history[-1]` to be a placeholder assistant message. `call_log`
+        is the rendered "What happened?" markdown text — passed through
+        unchanged until the dispatch completes, then replaced with the
+        specialist's tool-execution trace.
         """
         agent_name = self._router.agent_display_name(agent_id)
 
@@ -90,24 +100,30 @@ class CoordinatorUI:
         if status_note:
             routing_note += f"\n\n{status_note}"
         history[-1]["content"] = routing_note
-        yield history, ""
+        yield history, "", call_log
 
-        # Dispatch and get result, passing dataset constraint if set
+        # Dispatch and get result, passing dataset constraint if set. Also
+        # request the execution trace (pure post-processing of the chatbot
+        # history already on the wire — no extra calls/latency) for the
+        # "What happened?" panel.
         all_ids = [v for _, v in self._dataset_choices]
         constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
-        result = self._router.dispatch_to_specialist(agent_id, message, dataset_constraint=constraint)
+        result, trace = self._router.dispatch_to_specialist(
+            agent_id, message, dataset_constraint=constraint, return_trace=True
+        )
 
         full_response = (
             f"_Routing to **{agent_name}** for computation._\n\n"
             f"**Result from {agent_name}:**\n\n{result}"
         )
         history[-1]["content"] = full_response
-        yield history, ""
+        yield history, "", self._format_call_log(trace)
 
-    def _respond(self, message: str, history: list, selected_datasets: list, pending_specialist: dict | None):
-        """Handle one user turn. Yields (history, "", pending_specialist) tuples for streaming."""
+    def _respond(self, message: str, history: list, selected_datasets: list,
+                  pending_specialist: dict | None, call_log: str):
+        """Handle one user turn. Yields (history, "", pending_specialist, call_log) tuples for streaming."""
         if not message.strip():
-            yield history, "", pending_specialist
+            yield history, "", pending_specialist, call_log
             return
 
         # 0. If a dataset-specification prompt is pending, check whether this
@@ -125,8 +141,8 @@ class CoordinatorUI:
 
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": ""}]
-                for h, m in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets):
-                    yield h, m, None
+                for h, m, cl in self._dispatch_specialist(history, agent_id, combined_message, selected_datasets, call_log):
+                    yield h, m, None, cl
                 return
             # Doesn't look like a reply to the pending prompt — drop it and
             # classify this message fresh as a new question.
@@ -150,19 +166,19 @@ class CoordinatorUI:
                 )
                 history = history + [{"role": "user", "content": message},
                                       {"role": "assistant", "content": clarify_msg}]
-                yield history, "", {"message": message, "agent_id": agent_id}
+                yield history, "", {"message": message, "agent_id": agent_id}, call_log
                 return
 
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            for h, m in self._dispatch_specialist(history, agent_id, message, selected_datasets, reasoning):
-                yield h, m, None
+            for h, m, cl in self._dispatch_specialist(history, agent_id, message, selected_datasets, call_log, reasoning):
+                yield h, m, None, cl
 
         else:
             # Direct Claude response — stream it
             history = history + [{"role": "user", "content": message},
                                   {"role": "assistant", "content": ""}]
-            yield history, "", None
+            yield history, "", None, call_log
 
             accumulated = ""
             # Build plain history for the API (exclude the current turn)
@@ -174,15 +190,15 @@ class CoordinatorUI:
             for chunk in self._router.direct_response(message, plain_history):
                 accumulated += chunk
                 history[-1]["content"] = accumulated
-                yield history, "", None
+                yield history, "", None, call_log
 
 
     # ------------------------------------------------------------------
     # Session save / load
     # ------------------------------------------------------------------
 
-    def _save_session(self, history: list) -> str:
-        """Serialize chatbot history to a temp JSON file and return the path."""
+    def _save_session(self, history: list, call_log: str) -> str:
+        """Serialize chatbot history (and the latest call log) to a temp JSON file."""
         if not history:
             return None
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -191,23 +207,33 @@ class CoordinatorUI:
             delete=False,
             mode="w",
         )
-        json.dump(history, tmp, indent=2)
+        json.dump({"history": history, "call_log": call_log}, tmp, indent=2)
         tmp.close()
         return tmp.name
 
-    def _load_session(self, filepath) -> list:
-        """Deserialize a session JSON file back into chatbot history."""
+    def _load_session(self, filepath) -> tuple[list, str]:
+        """Deserialize a session JSON file back into (chatbot history, call_log).
+
+        Accepts both the current {"history": ..., "call_log": ...} format and
+        the older plain-list format (call_log defaults to the placeholder).
+        """
         if filepath is None:
-            return []
+            return [], self._NO_CALLS_NOTE
         try:
             with open(filepath, "r") as f:
-                history = json.load(f)
-            if not isinstance(history, list):
-                return []
-            return history
+                data = json.load(f)
+            if isinstance(data, list):
+                return data, self._NO_CALLS_NOTE
+            if isinstance(data, dict):
+                history = data.get("history", [])
+                call_log = data.get("call_log", self._NO_CALLS_NOTE)
+                if not isinstance(history, list):
+                    return [], self._NO_CALLS_NOTE
+                return history, call_log
+            return [], self._NO_CALLS_NOTE
         except Exception as exc:
             logger.warning("Failed to load session file: %s", exc)
-            return []
+            return [], self._NO_CALLS_NOTE
 
     # ------------------------------------------------------------------
     # UI construction
@@ -234,6 +260,13 @@ Conceptual questions are answered directly; computation is dispatched to special
             # Holds {"message": ..., "agent_id": ...} when the coordinator has
             # asked the user to specify a dataset and is awaiting their reply.
             pending_specialist = gr.State(value=None)
+
+            with gr.Accordion("What happened? (tool calls)", open=False):
+                gr.Markdown(
+                    "_Shows the specialist agent's actual tool calls and execution "
+                    "results from the most recent computation request._"
+                )
+                call_log_display = gr.Markdown(self._NO_CALLS_NOTE)
 
             with gr.Accordion("Dataset Selection (optional)", open=False):
                 gr.Markdown(
@@ -289,17 +322,17 @@ Conceptual questions are answered directly; computation is dispatched to special
             # Wire up interactions
             submit_btn.click(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector, pending_specialist],
-                outputs=[chatbot, msg_box, pending_specialist],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, call_log_display],
+                outputs=[chatbot, msg_box, pending_specialist, call_log_display],
             )
             msg_box.submit(
                 fn=self._respond,
-                inputs=[msg_box, chatbot, dataset_selector, pending_specialist],
-                outputs=[chatbot, msg_box, pending_specialist],
+                inputs=[msg_box, chatbot, dataset_selector, pending_specialist, call_log_display],
+                outputs=[chatbot, msg_box, pending_specialist, call_log_display],
             )
             save_btn.click(
                 fn=self._save_session,
-                inputs=[chatbot],
+                inputs=[chatbot, call_log_display],
                 outputs=[download_file],
             ).then(
                 fn=lambda p: gr.File(value=p, visible=p is not None),
@@ -309,7 +342,7 @@ Conceptual questions are answered directly; computation is dispatched to special
             session_file.upload(
                 fn=self._load_session,
                 inputs=[session_file],
-                outputs=[chatbot],
+                outputs=[chatbot, call_log_display],
             )
 
         return demo
