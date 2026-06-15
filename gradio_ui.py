@@ -97,14 +97,15 @@ class CoordinatorUI:
         """Append a routing notice to `history`, dispatch to the specialist, then
         fill in the result. Yields (history, "", panels, code_accordion) tuples
         for streaming, where `panels` is a (data_md, code_md, logic_md) triple
-        feeding the three read-only transparency dropdowns and `code_accordion`
-        is a gr.Accordion open-state update.
+        feeding the three read-only transparency dropdowns. The fourth element is
+        always gr.skip() (the Code panel is left as the user set it — the live
+        code is shown inline in the chat bubble instead of by auto-opening it).
 
-        Expects `history[-1]` to be a placeholder assistant message. Because this
-        is a fresh computation, the panels are reset (clearing any previous run's
-        trace) and then filled in live as the agent streams its steps. The Code
-        panel is auto-expanded for the duration so the substance is visible
-        without a manual click — the chat bubble itself stays a calm status line.
+        Expects `history[-1]` to be a placeholder assistant message. The panels
+        are reset (clearing any previous run's trace), then while the agent works
+        the chat bubble shows the executing code inline, settling to the polished
+        final answer when done. Full detail persists in the Data/Code/Logic
+        dropdowns.
         """
         agent_name = self._router.agent_display_name(agent_id)
 
@@ -115,16 +116,16 @@ class CoordinatorUI:
         if status_note:
             routing_note += f"\n\n{status_note}"
         history[-1]["content"] = routing_note
-        # New run → clear the previous run's panels and auto-open the Code panel.
+        # New run → clear the previous run's panels.
         panels = self._empty_panels()
-        yield history, "", panels, gr.Accordion(open=True)
+        yield history, "", panels, gr.skip()
 
         # Stream the specialist's steps live. dispatch_to_specialist_stream
         # yields (display_text, trace, panels, done) frames as the agent works;
         # the panels bucketing is pure post-processing of the chatbot history
         # already on the wire (no extra calls/latency) and feeds the three
-        # transparency dropdowns. `display_text` is a calm status line
-        # (step · phase · elapsed) for progress frames, the answer when done.
+        # transparency dropdowns. `display_text` is the executing code inline for
+        # progress frames, and the polished answer when done.
         all_ids = [v for _, v in self._dataset_choices]
         constraint = selected_datasets if selected_datasets and set(selected_datasets) != set(all_ids) else None
 
@@ -139,10 +140,9 @@ class CoordinatorUI:
                     f"**Result from {agent_name}:**\n\n{text}"
                 )
             else:
-                # Calm live status line while the agent is still working.
-                history[-1]["content"] = f"⏳ _**{agent_name}** · {text}_"
-            # Keep the Code panel open throughout (and after) the run.
-            yield history, "", panels, gr.Accordion(open=True)
+                # Live: show the executing code inline while the agent works.
+                history[-1]["content"] = f"**{agent_name} is working…**\n\n{text}"
+            yield history, "", panels, gr.skip()
 
     def _respond(self, message: str, history: list, selected_datasets: list,
                   pending_specialist: dict | None,
@@ -288,7 +288,7 @@ class CoordinatorUI:
 
         with gr.Blocks(title="Research Coordinator") as demo:
             gr.Markdown(
-                """# 🔬 Research Coordinator
+                """# Research Coordinator
 
 A lightweight orchestrating assistant for multi-omics bioinformatics.
 Conceptual questions are answered directly; computation is dispatched to specialist agents.
@@ -312,7 +312,7 @@ Conceptual questions are answered directly; computation is dispatched to special
                 "_Behind each answer: expand to see **what data** was used, "
                 "**what code** ran, and the **reasoning** the specialist followed._"
             )
-            with gr.Accordion("📊 Data used", open=False):
+            with gr.Accordion("Data used", open=False):
                 gr.Markdown(
                     "_Datasets, loaders, source references, and sample counts "
                     "the specialist touched in the most recent computation._"
@@ -320,13 +320,13 @@ Conceptual questions are answered directly; computation is dispatched to special
                 data_panel = gr.Markdown(self._NO_DATA_NOTE)
             # Named so we can auto-expand it live while the specialist runs
             # (see _dispatch_specialist) — it carries the meatiest substance.
-            code_accordion = gr.Accordion("💻 Code used", open=False)
+            code_accordion = gr.Accordion("Code used", open=False)
             with code_accordion:
                 gr.Markdown(
                     "_The actual code the specialist executed, with its outputs._"
                 )
                 code_panel = gr.Markdown(self._NO_CODE_NOTE)
-            with gr.Accordion("🧠 Logic / reasoning", open=False):
+            with gr.Accordion("Logic / reasoning", open=False):
                 gr.Markdown(
                     "_The step-by-step reasoning the specialist followed to reach "
                     "the answer._"

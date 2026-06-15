@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import yaml
 import httpx
 from pathlib import Path
@@ -300,7 +299,6 @@ class ResearchRouter:
             # (new gradio_client = new session_hash) before giving up.
             result = None
             gc = None
-            start_ts = time.time()
             for _attempt in range(MAX_DISPATCH_RETRIES):
                 gc = GradioClient(hf_space, **client_kwargs)
                 # Step 1: stash the query in gr.State for this session.
@@ -311,9 +309,9 @@ class ResearchRouter:
                 result = None
                 for frame in job:
                     result = frame
-                    yield (self._render_progress(frame, time.time() - start_ts),
-                           self._extract_execution_trace(frame),
-                           self._extract_panels(frame), False)
+                    panels = self._extract_panels(frame)
+                    yield (self._render_progress(panels),
+                           self._extract_execution_trace(frame), panels, False)
                 if result is None:
                     result = job.result()
                 if self._echoed_query(result, message):
@@ -335,9 +333,9 @@ class ResearchRouter:
                 cont = None
                 for frame in job:
                     cont = frame
-                    yield (self._render_progress(frame, time.time() - start_ts),
-                           self._extract_execution_trace(frame),
-                           self._extract_panels(frame), False)
+                    panels = self._extract_panels(frame)
+                    yield (self._render_progress(panels),
+                           self._extract_execution_trace(frame), panels, False)
                 result = cont if cont is not None else job.result()
 
             solution, last_assistant, _ = self._extract_response(result)
@@ -398,47 +396,17 @@ class ResearchRouter:
                 solution = content
         return solution, last_assistant, step_limit_hit
 
-    # Specialist step-type labels → friendly phase words, checked newest-first.
-    # The specialist emits these as ChatMessage titles; their *content* is the
-    # real work, which goes to the Data/Code/Logic panels — so the chat bubble
-    # only needs a calm status line, not the labels themselves.
-    _PHASE_LABELS = [
-        ("Executing Code", "executing code"),
-        ("Execution Result", "processing results"),
-        ("Current Plan", "planning"),
-        ("Thinking", "thinking"),
-    ]
-
     @staticmethod
-    def _render_progress(chatbot_history: list, elapsed: float | None = None) -> str:
-        """Render a single calm status line: 'step N · <phase> · M:SS'.
+    def _render_progress(panels: dict) -> str:
+        """Inline live view for the chat bubble while the specialist runs.
 
-        Per-step labels ("Thinking", "Executing Code", …) are low-information
-        noise in the chat, so instead of listing them we summarise: the current
-        step number, the most recent phase, and wall-clock elapsed. The real
-        substance streams into the Data/Code/Logic panels.
+        Shows the Code panel's content (the code the agent is executing and its
+        outputs) inline, so the user watches the real work happen; the bubble
+        settles to the polished final answer once done. Falls back to a plain
+        "working" note before any code has run.
         """
-        step = 0
-        phase = "working"
-        if isinstance(chatbot_history, list):
-            for msg in chatbot_history:
-                if not isinstance(msg, dict) or msg.get("role") != "assistant":
-                    continue
-                raw = msg.get("content", "") or ""
-                nums = re.findall(r"Step (\d+)", raw)
-                if nums:
-                    step = max(step, max(int(n) for n in nums))
-                for key, label in ResearchRouter._PHASE_LABELS:
-                    if key in raw:
-                        phase = label  # later messages win → most recent phase
-                        break
-        parts = []
-        if step:
-            parts.append(f"step {step}")
-        parts.append(phase)
-        if elapsed is not None:
-            parts.append(f"{int(elapsed) // 60}:{int(elapsed) % 60:02d}")
-        return " · ".join(parts)
+        code = (panels or {}).get("code", "").strip()
+        return code if code else "_Working…_"
 
     @staticmethod
     def _extract_execution_trace(chatbot_history: list, max_chars: int = 6000) -> str:
@@ -499,6 +467,21 @@ class ResearchRouter:
         re.IGNORECASE,
     )
 
+    # Strip the specialist's UI emojis (🤔 ⚡ 📊 💻 🧠 ⏳ 📋 …) from displayed text.
+    _EMOJI_RE = re.compile(
+        "[\U0001F300-\U0001FAFF"   # pictographs & symbols
+        "\U00002600-\U000027BF"     # misc symbols + dingbats
+        "\U00002300-\U000023FF"     # technical (⏳ ⌛ …)
+        "\U00002B00-\U00002BFF"     # misc arrows/stars
+        "\U0001F1E6-\U0001F1FF"     # regional indicators
+        "️]"                    # variation selector
+    )
+    # Per-step timing footers the specialist prints — inaccurate as a wall clock
+    # and pure noise in the Data/Code/Logic panels, so drop them.
+    _DURATION_RE = re.compile(
+        r"(?:Step\s*\d+\s*\|\s*)?Duration:\s*[\d.]+\s*s", re.IGNORECASE
+    )
+
     @staticmethod
     def _extract_panels(chatbot_history: list, max_chars: int = 5000) -> dict:
         """Bucket the agent's history into Data / Code / Logic views for the UI.
@@ -522,7 +505,10 @@ class ResearchRouter:
             return empty
 
         def _strip_html(text: str) -> str:
+            text = ResearchRouter._EMOJI_RE.sub("", text)
             text = re.sub(r"<[^>]+>", "", text)
+            text = ResearchRouter._DURATION_RE.sub("", text)
+            text = re.sub(r"[ \t]+\n", "\n", text)
             return re.sub(r"\n{3,}", "\n\n", text).strip()
 
         code_blocks: list[str] = []
