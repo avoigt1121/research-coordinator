@@ -6,6 +6,7 @@ Routes user messages to either:
 from __future__ import annotations
 
 import json
+import os
 import re
 import yaml
 import httpx
@@ -50,7 +51,6 @@ class ResearchRouter:
         # Build a quick lookup by agent id
         self._agents = {a["id"]: a for a in self._agents_cfg["agents"]}
 
-        import os
         # HF Space secret is named "Anthropic_API_KEY" (matches DecoupleRpy Space)
         api_key = os.environ.get("Anthropic_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         self._client = Anthropic(api_key=api_key)
@@ -201,7 +201,6 @@ class ResearchRouter:
             HF_SPACE_DECOUPLERPY=anne-voigt/Paper2Agent_decoupleRpy_dev
         This keeps dev/prod routing in env config, not in branch-divergent code.
         """
-        import os
         override = os.environ.get(f"HF_SPACE_{agent['id'].upper()}")
         return override or agent["hf_space"]
 
