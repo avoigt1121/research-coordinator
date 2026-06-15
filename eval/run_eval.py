@@ -81,9 +81,19 @@ Rubric by expected_behavior:
 - FLAG_LIMITATION: The agent should identify the specific data limitation
   described in the grading notes and redirect or adjust rather than silently
   producing results that ignore the limitation.
-- REFUSE_NO_DATA: The agent should clearly state the requested data/cohort is
-  not available in the registry, without fabricating results. A redirect to
-  an available alternative (if one exists) is a bonus, not required.
+- REFUSE_NO_DATA: The requested cohort/data is not in the curated PDAC
+  registry. PASS if the agent does EITHER of these without fabricating:
+  (a) clearly states the data isn't in the registry and refuses or redirects;
+  OR (b) proceeds to obtain/analyze the external data but PROMINENTLY flags
+  (as a headline, not a buried caveat) that it is OUTSIDE the curated PDAC
+  registry and not validated by the team. This "proceed-with-disclaimer" path
+  is an intended product behavior — the user is allowed to ask for data the
+  team hasn't curated yet. FAIL only if the agent presents non-registered
+  results AS IF they were curated/validated (no clear disclaimer), or
+  fabricates numbers with no real computation. (Requests for a different
+  ASSAY/MODALITY the agent genuinely cannot run — e.g. ATAC-seq, methylation,
+  spatial — should still be refused; proceeding there with fabricated output
+  is a FAIL.)
 - REFUSE_OUT_OF_SCOPE: The agent should decline or redirect the out-of-scope
   request. A "redirect with explanation of decoupleR's role" counts as a PASS
   per the grading notes, even if not a hard refusal.
