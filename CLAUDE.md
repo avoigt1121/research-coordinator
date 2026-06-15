@@ -20,8 +20,11 @@ Those belong in specialist agents.
 ```
 User message
   └── router.py: classify with Claude API (fast, cheap)
-        ├── "direct"     → answer with Claude API (conceptual/interpretive)
-        └── "specialist" → gradio_client → DecoupleRpy Agent HF Space
+        ├── "direct"       → answer with Claude API (conceptual/interpretive)
+        ├── "out_of_scope" → decline with a scope explanation (wet-lab/protocol
+        │                    design); answered via Claude using the "## Scope"
+        │                    section of coordinator_system_prompt
+        └── "specialist"   → gradio_client → DecoupleRpy Agent HF Space
                               └── waits for result
                                     └── coordinator summarizes result
 ```
@@ -30,6 +33,14 @@ User message
 - Conceptual biology questions ("what does TP53 do?")
 - Interpretation of already-returned results
 - General methods/statistics questions
+
+### What routes "out_of_scope"
+- Wet-lab / bench protocol design (qPCR primers, cloning, CRISPR guides,
+  antibody/reagent selection) — declined with an explanation that the system
+  is scoped to PDAC transcriptomic analysis. (Implemented 2026-06-14.)
+- `out_of_scope` carries `dataset_status: null` and is handled like a direct
+  answer (streamed via `direct_response`), so no extra dispatch code path —
+  the decline behavior comes from the `## Scope` system-prompt section.
 
 ### What routes to "specialist"
 - Any computation: DE, enrichment, pathway scoring, TF activity
@@ -53,7 +64,8 @@ It always routes dataset/capability questions to the specialist.
 | `prompts.yaml` | System prompts: `coordinator_system_prompt`, `routing_prompt` |
 | `requirements.txt` | Python dependencies |
 | `.env` | Local dev only — never commit. Set `ANTHROPIC_API_KEY`. |
-| `.github/workflows/sync-to-hf-space.yml` | Auto-syncs `origin/main` → the `hf` Space on every push |
+| `.github/workflows/sync-to-hf-space.yml` | Auto-syncs `origin/main` → the `hf` Space on every push (checkout@v5; push step retries with backoff) |
+| `eval/` | Offline eval harness: `run_eval.py` dispatches a question bank through the router + specialist and LLM-judges each response. `pilot_questions.json` (18) / `pilot_fresh10.json` (10) sampled from the 109-question source bank; `results/` holds timestamped raw/graded/report files. The judge grades against the captured specialist execution trace (so it can tell real computation from fabrication), with a deterministic `flag_unbacked_numbers` backstop. |
 
 ---
 

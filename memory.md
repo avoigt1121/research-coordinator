@@ -1,27 +1,45 @@
 # memory.md — Research Coordinator Working State
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 ---
 
 ## Current State
 
-Deployed and functional. **`origin`, `hf`, and the live Space are all in sync
-at `92095ea`** — confirmed `RUNNING` via the HF Space runtime API
-(`sha: 92095ea064cf631a4e7a844a2d4e1a0df7dcedf4`). The
-auto-continue-past-step-limit fix (`98c2a61`) and the rest of the
-2026-06-09/06-12 eval-harness work are now live.
+Deployed and functional. **`origin` and the live Space are in sync at
+`aaf4c1a`**, confirmed `RUNNING` via the HF Space runtime API. The companion
+`DecoupleRpy_Agent` Space is `RUNNING` at `f39da02` (its `origin` IS the Space).
 
-**This class of drift shouldn't recur**: `.github/workflows/sync-to-hf-space.yml`
-(added 2026-06-12) force-pushes `origin/main` → `hf` on every push to `main`.
-`origin` is now the source of truth — do not push directly to `hf`.
+**Sync is automatic and hardened**: `.github/workflows/sync-to-hf-space.yml`
+force-pushes `origin/main` → `hf` on every push to `main`. `origin` is the
+source of truth — do not push directly to `hf`. `HF_TOKEN` secret is confirmed
+working. As of 2026-06-14 the workflow uses `actions/checkout@v5` (cleared the
+Node 20 deprecation warning) and wraps the push in a 3-attempt retry with
+backoff (absorbs the transient HF exit-128 that happens when force-pushes
+cluster while the Space is mid-rebuild — verified green on `6bd19bd`).
 
-`HF_TOKEN` repo secret (write access to `anne-voigt/research_coordinator`)
-was added 2026-06-13 and is **confirmed working**: run
-[27474397877](https://github.com/avoigt1121/research-coordinator/actions/runs/27474397877)
-(triggered by `92095ea`) succeeded end-to-end including the "Push to Hugging
-Face Space" step, and the live Space rebuilt and is `RUNNING` at that sha.
-No further action needed on this item.
+**This session (2026-06-14) — Groups 3/4/5/6 + blind-spot follow-ups, all
+deployed:** see the dated sections below for detail. Headlines:
+- **Group 3** (`DecoupleRpy_Agent b9efd4b`): Capabilities & Out-of-Scope prompt
+  section (survival stats, deconvolution) — OOS-009/013 now PASS.
+- **Group 4** (`research-coordinator a3010ac`): `out_of_scope` routing for
+  wet-lab/protocol questions — OOS-002 now declines with scope explanation.
+- **Group 5** (`b469629`): `REQUEST_REQUIRED_INPUT` eval category for ANS-021.
+- **Group 6** (eval `3c04a2f` + agent `d12ffc3`): the "fabrication" FAILs were
+  mostly an eval artifact — the agent runs real tools but the judge couldn't
+  see the trace. Fix: trace-aware judging + a narrow deterministic backstop
+  (`8ae021b`) + agent provenance/re-read-before-reporting. Verified live.
+- **Cohort-size heuristic** (`DecoupleRpy_Agent 861db00`): manifests have no
+  `n_samples` field, so the agent couldn't rank by size; encoded sizes + a
+  'largest/curated' rule. INF-005's bad pick was an agent issue, not an
+  eval-grading bug.
+- **Availability & Substitution Policy** (`DecoupleRpy_Agent f39da02` + eval
+  `52b269c`): fixes ANS-013 over-refusal, LIM-006 silent substitution, and the
+  NOD-001 product decision (non-registered external data is ALLOWED with a
+  prominent "not curated/validated" disclaimer).
+- Full 18-question re-run: PASS 12/PARTIAL 2/FAIL 4. Fresh 10-question
+  blind-spot run: PASS 7/FAIL 3 (the 3 FAILs drove the substitution-policy
+  fix; not yet re-run to confirm they flip).
 
 ---
 
@@ -917,11 +935,16 @@ above (or a variant) before starting new work on this item.
 
 | Remote | URL | Status |
 |--------|-----|--------|
-| `origin` | `github.com/avoigt1121/research-coordinator` | `main` @ `93056cf` |
-| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | `main` @ `93056cf` |
+| `origin` | `github.com/avoigt1121/research-coordinator` | `main` @ `aaf4c1a` (HEAD before this memory edit) |
+| `hf` | `huggingface.co/spaces/anne-voigt/research_coordinator` | synced to `origin/main`, `RUNNING` |
 
 `origin` is the source of truth. `.github/workflows/sync-to-hf-space.yml`
 force-pushes `origin/main` → `hf` on every push to `main` — do not push
 directly to `hf` (it will be overwritten on the next sync). `HF_TOKEN` repo
-secret added 2026-06-13; first successful run not yet confirmed (run
-27473037298 predates the secret and failed as expected).
+secret confirmed working. Workflow hardened 2026-06-14: `actions/checkout@v5`
+(Node 24) + 3-attempt retry-with-backoff on the push step to absorb transient
+HF exit-128s from clustered pushes.
+
+Companion: `DecoupleRpy_Agent` — `origin` IS its HF Space
+(`anne-voigt/Paper2Agent_decoupleRpy`); `git push origin main` deploys directly.
+Currently `RUNNING` at `f39da02`.
