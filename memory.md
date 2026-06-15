@@ -520,6 +520,48 @@ No confabulation. The eval judge would now also see this trace and grade it
 PASS on evidence. Full eval re-run with both fixes not yet done (optional
 follow-up).
 
+### Group 6 follow-ups — 2026-06-14
+
+**INF-005 was NOT an eval-grading bug (correction).** Initially suspected the
+grading note was wrong, but that was based on a conflated question wording
+(the Bailey-subtype framing came from the *diagnostic* dispatch, not INF-005).
+INF-005 actually asks "Estimate TF activities on the largest curated PDAC
+RNA-seq cohort" — no subtypes. `tcga_paad` is the only RNA-seq cohort with a
+curated subset (`curated_n=150`; manifests have NO `n_samples` field at all),
+so the grading note (tcga_paad) is correct and the agent's pick of the
+92-sample `paca_au_rnaseq` (rationalized with an unrequested Bailey qualifier)
+was the weak answer. Grading left unchanged.
+
+**Root cause of the bad pick: the agent had no size data.** Manifests carry no
+`n_samples` field, so the agent literally could not rank cohorts by size.
+**Fix (`DecoupleRpy_Agent` `861db00`, deployed, RUNNING):** encoded approximate
+cohort sizes + an explicit rule into the "## Dataset Selection Heuristics"
+section — 'largest' = most samples, 'curated' = has a curated PDAC subset;
+RNA-seq sizes (paca_ca_rnaseq ~262, tcga_paad 185/150-curated, cptac_pda ~131,
+paca_au_rnaseq ~92); 'largest curated RNA-seq' → tcga_paad, 'largest RNA-seq'
+→ paca_ca_rnaseq, 'largest cohort' (any modality) → gse71729_moffitt; and do
+NOT pick a smaller cohort for subtype labels unless subtypes were requested.
+(A heavier alternative — add a real `n_samples` field to every biodata-registry
+manifest and surface it — was deferred as over-engineering; sizes are stable.)
+
+**Narrow fabrication backstop (`research-coordinator` `8ae021b`).** Per the
+agreed "keep prompt rules primary, add one narrow code guard" plan:
+`ResearchRouter.flag_unbacked_numbers(response, trace)` returns True only when a
+response has a results-table-sized cluster of numbers (>=8 decimals) AND the
+trace has no tool output; `run_eval.py` forces FAIL when it fires. Verified it
+does NOT trip on refusals/clarifications, flags a real solution only when its
+trace is empty, and passes it when the trace has real tool output. Deliberately
+NOT made the primary enforcer / NOT put in the agent's `should_continue` loop —
+a blunt "no solution without execution" rule would break legitimate
+non-execution answers (out-of-scope, REQUEST_REQUIRED_INPUT, FLAG_LIMITATION,
+conceptual).
+
+**ANS-021: decided NOT to fix.** The PARTIAL is acceptable — it already
+satisfies REQUEST_REQUIRED_INPUT (asks for the ranked list correctly); the only
+gap is it didn't do partial setup first / over-argued GSEA scope (GSEA IS
+supported via `decoupler_run_individual_methods`). Judged too minor/edge-case to
+warrant a prompt change (user agreed it risked over-engineering). Left as-is.
+
 ### Eval Environment Note
 The local dev environment's default Python (3.9, via
 `/Library/Developer/CommandLineTools/usr/bin/python3`) can only install
